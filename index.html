@@ -81,6 +81,18 @@
   }
   .recipe-card h3 { margin: 0 0 4px; font-size: 1.05rem; font-family: Georgia, serif; }
   .recipe-meta { font-size: 0.78rem; color: var(--muted); margin-bottom: 6px; }
+  .recipe-meta a { color: var(--leaf-dark); }
+  .source-link {
+    display: inline-block; margin-top: 4px; font-size: 0.82rem; color: var(--leaf-dark);
+    font-weight: 600; text-decoration: none;
+  }
+  .serves-review { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; margin-bottom: 10px; }
+  .serves-review h4 { margin: 0 0 8px; font-family: Georgia, serif; font-size: 0.98rem; }
+  .serves-row { display:flex; align-items:center; gap:8px; font-size: 0.85rem; }
+  .serves-row input[type="number"] {
+    width: 64px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px;
+    font-size: 0.9rem; background: var(--cream); color: var(--ink);
+  }
   .tag-row { display:flex; flex-wrap: wrap; gap: 5px; }
   .tag {
     font-size: 0.66rem; font-weight: 600; letter-spacing: 0.01em;
@@ -131,8 +143,13 @@
   .schema-box pre { white-space: pre-wrap; font-size: 0.72rem; color: var(--ink); background: var(--card); padding: 10px; border-radius: 8px; }
 
   /* Shopping list */
+  .add-item-row { display:flex; gap:8px; margin-bottom: 14px; }
+  .add-item-row input[type="text"] {
+    flex: 1; padding: 9px 12px; border: 1px solid var(--line); border-radius: 8px;
+    font-size: 0.9rem; background: var(--card); color: var(--ink);
+  }
   .shop-item {
-    display:flex; align-items:flex-start; gap:12px; padding: 10px 2px;
+    display:flex; align-items:flex-start; gap:10px; padding: 10px 2px;
     border-bottom: 1px solid var(--line); cursor: pointer;
   }
   .shop-item:last-child { border-bottom: none; }
@@ -144,7 +161,26 @@
   .shop-item.checked .box { background: var(--leaf); border-color: var(--leaf); }
   .shop-item.checked .box svg { opacity: 1; }
   .shop-item.checked .item-text { text-decoration: line-through; color: var(--muted); }
-  .item-text { font-size: 0.94rem; }
+  .item-body { flex: 1; min-width: 0; }
+  .item-text { font-size: 0.94rem; word-break: break-word; }
+  .item-text-input {
+    width: 100%; font-size: 0.94rem; padding: 4px 6px; border: 1px solid var(--leaf);
+    border-radius: 6px; background: var(--card); color: var(--ink);
+  }
+  .item-src { font-size: 0.7rem; color: var(--muted); margin-top: 2px; }
+  .item-controls { display:flex; gap: 4px; flex-shrink: 0; align-items:flex-start; }
+  .icon-btn {
+    border: 1px solid var(--line); background: var(--cream); color: var(--muted);
+    font-size: 0.68rem; font-weight: 600; padding: 4px 7px; border-radius: 7px; white-space: nowrap;
+  }
+  .icon-btn.on { background: var(--staple); color: #fff; border-color: var(--staple); }
+  .staple-section .section-label {
+    color: var(--staple); border-bottom-color: var(--staple);
+  }
+  .staple-section .shop-item { background: var(--staple-bg); border-bottom: 1px solid var(--staple-line); border-radius: 8px; padding: 10px 10px; margin-bottom: 4px; }
+  .staple-section .box { border-color: var(--staple); }
+  .staple-section .shop-item.checked .box { background: var(--staple); border-color: var(--staple); }
+  .staple-hint { font-size: 0.76rem; color: var(--muted); margin: 4px 2px 10px; }
   .empty-msg { color: var(--muted); font-size: 0.9rem; text-align: center; padding: 40px 20px; }
 
   /* Settings */
@@ -189,11 +225,26 @@ const DB_NAME = "recipe-box";
 const DB_VERSION = 1;
 const STORE = "recipes";
 let db;
-let selectedForList = new Set(); // recipe ids chosen for the shopping list
-let shopChecked = {}; // persisted checked state for shopping list items
 let currentTab = "recipes";
 let currentSearch = "";
 let currentTagFilter = "";
+let pendingImport = null; // recipes parsed but awaiting serves confirmation
+let recipesFlash = ""; // one-shot status message shown on the Recipes tab
+
+// Ingredient keywords that are auto-flagged as "staples" (pantry basics you
+// probably already have) when a recipe is added to the shopping list. Users
+// can still toggle the staple flag on any item by hand.
+const STAPLE_KEYWORDS = [
+  "salt", "pepper", "olive oil", "vegetable oil", "sesame oil", "oil",
+  "sugar", "flour", "vinegar", "soy sauce", "stock cube", "bay leaf"
+];
+function looksLikeStaple(text) {
+  const t = text.toLowerCase();
+  return STAPLE_KEYWORDS.some(k => new RegExp("\\b" + k + "\\b").test(t));
+}
+function genId() {
+  return Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
+}
 
 function openDB() {
   return new Promise((resolve, reject) => {
@@ -522,21 +573,23 @@ async function renderRecipes() {
     </select>
   </div>`;
 
-  if (selectedForList.size > 0) {
-    html += `<div class="status-msg status-ok">${selectedForList.size} recipe(s) selected for shopping list. Go to the Shopping List tab to build it.</div>`;
+  if (recipesFlash) {
+    html += `<div class="status-msg status-ok">${escapeHtml(recipesFlash)}</div>`;
+    recipesFlash = "";
   }
 
   if (filtered.length === 0) {
     html += `<div class="empty-msg">No recipes match yet. Add one from the Add tab, or clear your search.</div>`;
   } else {
     filtered.forEach(r => {
-      const isSelected = selectedForList.has(r.id);
+      const metaParts = [r.servesLabel, r.time].filter(Boolean).join(" &middot; ");
       html += `<div class="recipe-card" data-id="${escapeAttr(r.id)}">
         <h3>${escapeHtml(r.title)}</h3>
-        <div class="recipe-meta">${escapeHtml(r.servesLabel || "")} ${r.servesLabel && r.time ? "&middot;" : ""} ${escapeHtml(r.time || "")}</div>
+        <div class="recipe-meta">${metaParts}</div>
+        ${sourceLineHtml(r)}
         <div class="tag-row">${(r.tags || []).map(t => `<span class="tag">${escapeHtml(t)}</span>`).join("")}</div>
         <div class="card-actions">
-          <button class="mini-btn ${isSelected ? "selected" : ""}" data-action="select" data-id="${escapeAttr(r.id)}">${isSelected ? "✓ In list" : "+ Add to list"}</button>
+          <button class="mini-btn" data-action="select" data-id="${escapeAttr(r.id)}">+ Add to shopping list</button>
           <button class="mini-btn danger" data-action="delete" data-id="${escapeAttr(r.id)}">Delete</button>
         </div>
       </div>`;
@@ -556,16 +609,18 @@ async function renderRecipes() {
 
   main.querySelectorAll(".recipe-card").forEach(card => {
     card.addEventListener("click", (e) => {
-      if (e.target.closest("button")) return;
+      if (e.target.closest("button") || e.target.closest("a")) return;
       renderDetail(card.dataset.id);
     });
   });
   main.querySelectorAll('[data-action="select"]').forEach(btn => {
-    btn.addEventListener("click", (e) => {
+    btn.addEventListener("click", async (e) => {
       e.stopPropagation();
-      const id = btn.dataset.id;
-      if (selectedForList.has(id)) selectedForList.delete(id);
-      else selectedForList.add(id);
+      const r = recipes.find(x => x.id === btn.dataset.id);
+      if (!r) return;
+      const result = await addIngredientsToShoppingList(r);
+      recipesFlash = `Added ${result.added} item(s) from "${r.title}" to your shopping list` +
+        (result.skipped ? ` (${result.skipped} already on it)` : "") + ".";
       renderRecipes();
     });
   });
@@ -574,23 +629,34 @@ async function renderRecipes() {
       e.stopPropagation();
       if (!confirm("Delete this recipe? This can't be undone (unless you have an exported backup).")) return;
       await deleteRecipe(btn.dataset.id);
-      selectedForList.delete(btn.dataset.id);
       renderRecipes();
     });
   });
 }
 
-async function renderDetail(id) {
+function sourceLineHtml(r) {
+  if (!r.source && !r.sourceUrl) return "";
+  if (r.sourceUrl) {
+    return `<div class="recipe-meta"><a href="${escapeAttr(r.sourceUrl)}" target="_blank" rel="noopener">${escapeHtml(r.source || r.sourceUrl)} ↗</a></div>`;
+  }
+  return `<div class="recipe-meta">${escapeHtml(r.source)}</div>`;
+}
+
+async function renderDetail(id, flash) {
   const main = document.getElementById("main");
   const recipes = await getAllRecipes();
   const r = recipes.find(x => x.id === id);
   if (!r) { renderRecipes(); return; }
 
   main.innerHTML = `
+    ${flash ? `<div class="status-msg status-ok">${escapeHtml(flash)}</div>` : ""}
     <button class="back-btn" id="backBtn">&larr; Back to recipes</button>
     <div class="detail-card">
       <h2>${escapeHtml(r.title)}</h2>
-      <div class="recipe-meta">${escapeHtml(r.servesLabel || "")} ${r.servesLabel && r.time ? "&middot;" : ""} ${escapeHtml(r.time || "")} ${r.source ? "&middot; " + escapeHtml(r.source) : ""}</div>
+      <div class="recipe-meta">${[r.servesLabel, r.time].filter(Boolean).map(escapeHtml).join(" &middot; ")}</div>
+      ${r.source || r.sourceUrl ? `<div>${r.sourceUrl
+        ? `<a class="source-link" href="${escapeAttr(r.sourceUrl)}" target="_blank" rel="noopener">${escapeHtml(r.source || "View source")} ↗</a>`
+        : `<div class="recipe-meta">${escapeHtml(r.source)}</div>`}</div>` : ""}
       <div class="tag-row">${(r.tags || []).map(t => `<span class="tag">${escapeHtml(t)}</span>`).join("")}</div>
 
       <div class="section-label">Ingredients</div>
@@ -600,64 +666,193 @@ async function renderDetail(id) {
       <ol class="method-list">${(r.method || []).map(m => `<li>${escapeHtml(m)}</li>`).join("")}</ol>
 
       ${r.notes ? `<div class="section-label">Notes</div><div class="notes-box">${escapeHtml(r.notes)}</div>` : ""}
+
+      <div class="card-actions">
+        <button class="mini-btn" id="addToListBtn">+ Add to shopping list</button>
+      </div>
     </div>
   `;
   document.getElementById("backBtn").addEventListener("click", renderRecipes);
+  document.getElementById("addToListBtn").addEventListener("click", async () => {
+    const result = await addIngredientsToShoppingList(r);
+    renderDetail(r.id, `Added ${result.added} item(s) to your shopping list` +
+      (result.skipped ? ` (${result.skipped} already on it)` : "") + ".");
+  });
 }
 
-/* ---------- Shopping list ---------- */
+/* ---------- Shopping list ----------
+   The shopping list is its own persisted, freely-editable list of items
+   (stored in the meta store under "shopItems"). Adding a recipe just
+   appends its ingredients as new items -- after that they're independent
+   of the recipe and can be renamed, deleted, checked off or flagged as
+   a staple like anything else. */
+
+async function getShopItems() {
+  return (await getMeta("shopItems")) || [];
+}
+async function saveShopItems(items) {
+  await setMeta("shopItems", items);
+}
+
+async function addIngredientsToShoppingList(recipe) {
+  const items = await getShopItems();
+  const existingText = new Set(items.map(i => i.text.trim().toLowerCase()));
+  let added = 0, skipped = 0;
+  (recipe.ingredients || []).forEach(ing => {
+    const norm = ing.trim().toLowerCase();
+    if (existingText.has(norm)) { skipped++; return; }
+    items.push({
+      id: genId(),
+      text: ing.trim(),
+      checked: false,
+      staple: looksLikeStaple(ing),
+      recipeTitle: recipe.title
+    });
+    existingText.add(norm);
+    added++;
+  });
+  await saveShopItems(items);
+  return { added, skipped };
+}
 
 async function renderShoppingList() {
   const main = document.getElementById("main");
-  const recipes = await getAllRecipes();
-  const chosen = recipes.filter(r => selectedForList.has(r.id));
+  const items = await getShopItems();
 
-  if (chosen.length === 0) {
-    main.innerHTML = `<div class="empty-msg">No recipes selected yet. Head to the Recipes tab and tap "+ Add to list" on the ones you're cooking this week.</div>`;
-    return;
-  }
+  const regular = items.filter(i => !i.staple);
+  const staples = items.filter(i => i.staple);
+  // unchecked first within each group
+  const order = (a, b) => (a.checked === b.checked ? 0 : a.checked ? 1 : -1);
+  regular.sort(order);
+  staples.sort(order);
 
-  const savedChecked = await getMeta("shopChecked");
-  shopChecked = savedChecked || {};
+  let html = `<div class="add-item-row">
+    <input type="text" id="newItemInput" placeholder="Add an item...">
+    <button class="primary-btn" id="addItemBtn" style="margin-top:0;">Add</button>
+  </div>`;
 
-  // Build a flat, tagged ingredient list, grouped by recipe for now
-  // (kept simple and literal here -- no auto-merge of quantities,
-  // since that needs judgement a plain script can't safely do).
-  let html = `<div class="status-msg status-ok">Shopping list for: ${chosen.map(r => escapeHtml(r.title)).join(", ")}</div>`;
-  html += `<div class="btn-row" style="margin:12px 0;"><button class="secondary-btn" id="clearSelectionBtn">Clear selection</button><button class="secondary-btn" id="uncheckAllBtn">Uncheck all</button></div>`;
-
-  chosen.forEach(r => {
-    html += `<div class="section-label">${escapeHtml(r.title)}</div><div>`;
-    (r.ingredients || []).forEach((ing, idx) => {
-      const key = r.id + "::" + idx;
-      const isChecked = !!shopChecked[key];
-      html += `<div class="shop-item ${isChecked ? "checked" : ""}" data-key="${escapeAttr(key)}">
-        <div class="box"><svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg></div>
-        <div class="item-text">${escapeHtml(ing)}</div>
+  if (items.length === 0) {
+    html += `<div class="empty-msg">Your shopping list is empty. Add items above, or head to a recipe and tap "+ Add to shopping list".</div>`;
+  } else {
+    if (regular.length > 0) {
+      html += `<div>${regular.map(renderShopItem).join("")}</div>`;
+    }
+    if (staples.length > 0) {
+      html += `<div class="staple-section">
+        <div class="section-label">Staples (probably already in the cupboard)</div>
+        <div class="staple-hint">Flagged just in case -- check your stock before buying.</div>
+        <div>${staples.map(renderShopItem).join("")}</div>
       </div>`;
-    });
-    html += `</div>`;
-  });
+    }
+    html += `<div class="btn-row" style="margin-top:16px;"><button class="secondary-btn" id="clearCheckedBtn">Clear checked items</button><button class="secondary-btn" id="clearAllBtn">Clear whole list</button></div>`;
+  }
 
   main.innerHTML = html;
 
+  document.getElementById("addItemBtn").addEventListener("click", addManualItem);
+  document.getElementById("newItemInput").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") addManualItem();
+  });
+
   main.querySelectorAll(".shop-item").forEach(el => {
-    el.addEventListener("click", async () => {
-      const key = el.dataset.key;
-      shopChecked[key] = !shopChecked[key];
-      await setMeta("shopChecked", shopChecked);
-      el.classList.toggle("checked");
+    const id = el.dataset.id;
+    el.querySelector(".box").addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const all = await getShopItems();
+      const item = all.find(i => i.id === id);
+      if (!item) return;
+      item.checked = !item.checked;
+      await saveShopItems(all);
+      renderShoppingList();
     });
+    const textEl = el.querySelector(".item-text");
+    if (textEl) {
+      textEl.addEventListener("click", (e) => {
+        e.stopPropagation();
+        startEditItem(el, id);
+      });
+    }
+    const stapleBtn = el.querySelector('[data-action="staple"]');
+    if (stapleBtn) {
+      stapleBtn.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        const all = await getShopItems();
+        const item = all.find(i => i.id === id);
+        if (!item) return;
+        item.staple = !item.staple;
+        await saveShopItems(all);
+        renderShoppingList();
+      });
+    }
+    const delBtn = el.querySelector('[data-action="delete-item"]');
+    if (delBtn) {
+      delBtn.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        const all = await getShopItems();
+        await saveShopItems(all.filter(i => i.id !== id));
+        renderShoppingList();
+      });
+    }
   });
-  document.getElementById("clearSelectionBtn").addEventListener("click", () => {
-    selectedForList.clear();
+
+  const clearCheckedBtn = document.getElementById("clearCheckedBtn");
+  if (clearCheckedBtn) clearCheckedBtn.addEventListener("click", async () => {
+    const all = await getShopItems();
+    await saveShopItems(all.filter(i => !i.checked));
     renderShoppingList();
   });
-  document.getElementById("uncheckAllBtn").addEventListener("click", async () => {
-    shopChecked = {};
-    await setMeta("shopChecked", shopChecked);
+  const clearAllBtn = document.getElementById("clearAllBtn");
+  if (clearAllBtn) clearAllBtn.addEventListener("click", async () => {
+    if (!confirm("Clear the entire shopping list?")) return;
+    await saveShopItems([]);
     renderShoppingList();
   });
+}
+
+function renderShopItem(item) {
+  return `<div class="shop-item ${item.checked ? "checked" : ""}" data-id="${escapeAttr(item.id)}">
+    <div class="box"><svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg></div>
+    <div class="item-body">
+      <div class="item-text">${escapeHtml(item.text)}</div>
+      ${item.recipeTitle ? `<div class="item-src">${escapeHtml(item.recipeTitle)}</div>` : ""}
+    </div>
+    <div class="item-controls">
+      <button class="icon-btn ${item.staple ? "on" : ""}" data-action="staple" title="Toggle staple">Staple</button>
+      <button class="icon-btn" data-action="delete-item" title="Remove item">✕</button>
+    </div>
+  </div>`;
+}
+
+function startEditItem(el, id) {
+  const bodyEl = el.querySelector(".item-body");
+  const current = el.querySelector(".item-text").textContent;
+  bodyEl.innerHTML = `<input type="text" class="item-text-input" value="${escapeAttr(current)}">`;
+  const input = bodyEl.querySelector("input");
+  input.focus();
+  input.setSelectionRange(current.length, current.length);
+  const save = async () => {
+    const val = input.value.trim();
+    const all = await getShopItems();
+    const item = all.find(i => i.id === id);
+    if (item && val) item.text = val;
+    await saveShopItems(all);
+    renderShoppingList();
+  };
+  input.addEventListener("blur", save);
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") input.blur();
+  });
+  input.addEventListener("click", (e) => e.stopPropagation());
+}
+
+async function addManualItem() {
+  const input = document.getElementById("newItemInput");
+  const text = input.value.trim();
+  if (!text) return;
+  const items = await getShopItems();
+  items.push({ id: genId(), text, checked: false, staple: looksLikeStaple(text), recipeTitle: null });
+  await saveShopItems(items);
+  renderShoppingList();
 }
 
 /* ---------- Add recipe (paste JSON) ---------- */
@@ -665,15 +860,24 @@ async function renderShoppingList() {
 const SCHEMA_EXAMPLE = {
   id: "short-unique-slug",
   title: "Recipe Title",
-  source: "e.g. cookbook name, page, or website",
+  source: "e.g. cookbook name & page, or website name",
+  sourceUrl: "https://example.com/recipe (optional, if it's online)",
   tags: ["chicken", "quick", "weeknight"],
-  servesLabel: "Serves 2 (or 'Makes 6 portions')",
+  serves: 2,
   time: "20 min",
   ingredients: ["200g chicken breast", "1 lemon"],
   method: ["Step one.", "Step two."],
   notes: "Optional tips or variations.",
   dateAdded: "2026-07-11"
 };
+
+function detectDefaultServes(item) {
+  if (item.serves && !isNaN(item.serves)) return Number(item.serves);
+  const label = item.servesLabel || "";
+  const m = label.match(/(\d+)/);
+  if (m) return Number(m[1]);
+  return null;
+}
 
 function renderAdd(statusMsg) {
   const main = document.getElementById("main");
@@ -682,19 +886,19 @@ function renderAdd(statusMsg) {
       <h3>Add a recipe</h3>
       <p>Paste a single recipe object, or an array of several, in the schema below. The easiest way to get this: send a photo or text of the recipe to Claude in a normal chat and ask it to return the recipe in this exact JSON schema.</p>
       <textarea id="jsonInput" placeholder="Paste recipe JSON here..."></textarea>
-      <button class="primary-btn" id="importJsonBtn">Add to Rustle Up</button>
+      <button class="primary-btn" id="reviewJsonBtn">Review before adding</button>
       ${statusMsg ? statusMsg : ""}
     </div>
     <div class="schema-box">
       <strong>Schema to send Claude / paste here:</strong>
       <pre>${escapeHtml(JSON.stringify(SCHEMA_EXAMPLE, null, 2))}</pre>
-      <div>Only <code>title</code> and <code>ingredients</code> are required — everything else is optional. If <code>id</code> is missing, one is generated from the title.</div>
+      <div>Only <code>title</code> and <code>ingredients</code> are required — everything else is optional, including <code>sourceUrl</code> if you want a link back to where the recipe came from. If <code>id</code> is missing, one is generated from the title.</div>
     </div>
   `;
-  document.getElementById("importJsonBtn").addEventListener("click", handleJsonImport);
+  document.getElementById("reviewJsonBtn").addEventListener("click", handleJsonReview);
 }
 
-async function handleJsonImport() {
+function handleJsonReview() {
   const raw = document.getElementById("jsonInput").value.trim();
   if (!raw) return;
   let parsed;
@@ -705,16 +909,63 @@ async function handleJsonImport() {
     return;
   }
   const items = Array.isArray(parsed) ? parsed : [parsed];
+  const valid = items.filter(item => item.title && item.ingredients);
+  const skipped = items.length - valid.length;
+  if (valid.length === 0) {
+    renderAdd(`<div class="status-msg status-err">Nothing to add — every item needs at least a title and ingredients.</div>`);
+    return;
+  }
+  pendingImport = valid.map(item => ({ item, serves: detectDefaultServes(item) }));
+  renderReview(skipped);
+}
+
+function renderReview(skippedCount) {
+  const main = document.getElementById("main");
+  let html = `<div class="settings-card">
+    <h3>Confirm servings</h3>
+    <p>Check how many each recipe serves before adding it — adjust any that aren't right.</p>`;
+  pendingImport.forEach((entry, idx) => {
+    html += `<div class="serves-review">
+      <h4>${escapeHtml(entry.item.title)}</h4>
+      <div class="serves-row">
+        <label for="serves-${idx}">Serves</label>
+        <input type="number" min="1" id="serves-${idx}" value="${entry.serves != null ? entry.serves : ""}" placeholder="?">
+      </div>
+    </div>`;
+  });
+  html += `<div class="btn-row" style="margin-top:6px;">
+      <button class="primary-btn" id="confirmImportBtn" style="margin-top:0;">Add ${pendingImport.length} recipe(s)</button>
+      <button class="secondary-btn" id="cancelImportBtn">Cancel</button>
+    </div>
+    ${skippedCount ? `<div class="status-msg status-err" style="margin-top:10px;">Skipped ${skippedCount} item(s) missing a title or ingredients.</div>` : ""}
+  </div>`;
+  main.innerHTML = html;
+
+  document.getElementById("confirmImportBtn").addEventListener("click", handleConfirmImport);
+  document.getElementById("cancelImportBtn").addEventListener("click", () => {
+    pendingImport = null;
+    renderAdd();
+  });
+}
+
+async function handleConfirmImport() {
   let added = 0;
-  let skipped = 0;
-  for (const item of items) {
-    if (!item.title || !item.ingredients) { skipped++; continue; }
+  for (let idx = 0; idx < pendingImport.length; idx++) {
+    const { item } = pendingImport[idx];
+    const servesInput = document.getElementById(`serves-${idx}`).value;
+    const serves = servesInput ? Number(servesInput) : null;
+    let servesLabel = item.servesLabel || "";
+    if (serves) {
+      servesLabel = /makes/i.test(servesLabel) ? `Makes ${serves} portions` : `Serves ${serves}`;
+    }
     const recipe = {
       id: item.id ? slugify(item.id) : slugify(item.title) + "-" + Date.now().toString(36).slice(-4),
       title: item.title,
       source: item.source || "",
+      sourceUrl: item.sourceUrl || "",
       tags: item.tags || [],
-      servesLabel: item.servesLabel || (item.serves ? `Serves ${item.serves}` : ""),
+      serves: serves || null,
+      servesLabel,
       time: item.time || "",
       ingredients: item.ingredients || [],
       method: item.method || [],
@@ -724,7 +975,8 @@ async function handleJsonImport() {
     await putRecipe(recipe);
     added++;
   }
-  renderAdd(`<div class="status-msg status-ok">Added ${added} recipe(s)${skipped ? `, skipped ${skipped} (missing title or ingredients)` : ""}.</div>`);
+  pendingImport = null;
+  renderAdd(`<div class="status-msg status-ok">Added ${added} recipe(s).</div>`);
 }
 
 /* ---------- Settings: export / import full library ---------- */
@@ -784,7 +1036,9 @@ function handleFileImport(e) {
           id: item.id || slugify(item.title) + "-" + Date.now().toString(36).slice(-4),
           title: item.title,
           source: item.source || "",
+          sourceUrl: item.sourceUrl || "",
           tags: item.tags || [],
+          serves: item.serves || null,
           servesLabel: item.servesLabel || "",
           time: item.time || "",
           ingredients: item.ingredients || [],
