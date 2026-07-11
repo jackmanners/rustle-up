@@ -1,7 +1,9 @@
-const CACHE_NAME = "rustle-up-v1";
+const CACHE_NAME = "rustle-up-v2";
 const ASSETS = [
   "./",
   "./index.html",
+  "./styles.css",
+  "./app.js",
   "./manifest.json",
   "./icons/icon-192.png",
   "./icons/icon-192-maskable.png",
