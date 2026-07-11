@@ -1,0 +1,847 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Rustle Up</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#4a7c59">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<style>
+  :root {
+    --ink: #2b2b26;
+    --leaf: #4a7c59;
+    --leaf-dark: #365e42;
+    --leaf-bg: #eef2ea;
+    --cream: #faf8f2;
+    --card: #ffffff;
+    --line: #e4dfd2;
+    --muted: #8c8778;
+    --staple: #b8863b;
+    --staple-bg: #fbf3e6;
+    --staple-line: #ecd9b8;
+    --danger: #b5533f;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--cream);
+    color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    -webkit-tap-highlight-color: transparent;
+  }
+  header {
+    position: sticky; top: 0; z-index: 10;
+    background: var(--cream);
+    padding: 16px 18px 10px;
+    border-bottom: 1px solid var(--line);
+  }
+  h1 {
+    margin: 0 0 12px;
+    font-family: Georgia, "Times New Roman", serif;
+    font-size: 1.5rem;
+    letter-spacing: -0.01em;
+    color: var(--leaf-dark);
+  }
+  .tabs {
+    display: flex;
+    background: var(--line);
+    border-radius: 10px;
+    padding: 3px;
+    gap: 3px;
+  }
+  .tab-btn {
+    flex: 1;
+    border: none;
+    background: transparent;
+    color: var(--muted);
+    font-size: 0.82rem;
+    font-weight: 600;
+    padding: 9px 4px;
+    border-radius: 8px;
+  }
+  .tab-btn.active { background: var(--cream); color: var(--ink); }
+  main { padding: 14px 18px 70px; max-width: 720px; margin: 0 auto; }
+
+  /* Recipe list */
+  .toolbar { display:flex; gap:8px; margin-bottom: 14px; flex-wrap: wrap; }
+  .toolbar input[type="text"] {
+    flex: 1; min-width: 140px;
+    padding: 9px 12px; border: 1px solid var(--line); border-radius: 8px;
+    font-size: 0.9rem; background: var(--card); color: var(--ink);
+  }
+  .toolbar select {
+    padding: 9px 10px; border: 1px solid var(--line); border-radius: 8px;
+    background: var(--card); color: var(--ink); font-size: 0.85rem;
+  }
+  .recipe-card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+    padding: 14px 16px; margin-bottom: 10px; cursor: pointer;
+  }
+  .recipe-card h3 { margin: 0 0 4px; font-size: 1.05rem; font-family: Georgia, serif; }
+  .recipe-meta { font-size: 0.78rem; color: var(--muted); margin-bottom: 6px; }
+  .tag-row { display:flex; flex-wrap: wrap; gap: 5px; }
+  .tag {
+    font-size: 0.66rem; font-weight: 600; letter-spacing: 0.01em;
+    color: var(--leaf-dark); background: var(--leaf-bg);
+    padding: 2px 8px; border-radius: 99px; white-space: nowrap;
+  }
+  .card-actions { display:flex; gap:8px; margin-top:10px; }
+  .mini-btn {
+    font-size: 0.72rem; border: 1px solid var(--line); background: var(--cream);
+    color: var(--muted); padding: 5px 10px; border-radius: 99px;
+  }
+  .mini-btn.selected { background: var(--leaf); color: #fff; border-color: var(--leaf); }
+  .mini-btn.danger { color: var(--danger); border-color: var(--danger); }
+
+  /* Detail view */
+  .back-btn {
+    background: none; border: none; color: var(--leaf-dark); font-size: 0.85rem;
+    font-weight: 600; padding: 0 0 12px; cursor: pointer;
+  }
+  .detail-card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 18px; }
+  .detail-card h2 { margin: 0 0 4px; font-family: Georgia, serif; }
+  .section-label {
+    font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.08em;
+    color: var(--leaf-dark); margin: 18px 0 8px; padding-bottom: 4px;
+    border-bottom: 2px solid var(--leaf); display: inline-block;
+  }
+  .ing-list, .method-list { margin: 0; padding-left: 20px; }
+  .ing-list li, .method-list li { margin-bottom: 6px; line-height: 1.4; }
+  .notes-box { background: var(--leaf-bg); border-radius: 10px; padding: 10px 14px; font-size: 0.88rem; margin-top: 8px; }
+
+  /* Add recipe */
+  textarea {
+    width: 100%; min-height: 220px; padding: 12px; border: 1px solid var(--line);
+    border-radius: 10px; font-family: ui-monospace, monospace; font-size: 0.82rem;
+    background: var(--card); color: var(--ink); resize: vertical;
+  }
+  .primary-btn {
+    background: var(--leaf); color: #fff; border: none; padding: 11px 16px;
+    border-radius: 8px; font-size: 0.9rem; font-weight: 600; margin-top: 10px;
+  }
+  .status-msg { font-size: 0.85rem; margin-top: 10px; padding: 10px 12px; border-radius: 8px; }
+  .status-ok { background: var(--leaf-bg); color: var(--leaf-dark); }
+  .status-err { background: #fbe8e4; color: var(--danger); }
+  .schema-box {
+    background: var(--staple-bg); border: 1px solid var(--staple-line); border-radius: 12px;
+    padding: 14px; margin-top: 18px; font-size: 0.82rem; color: var(--staple);
+  }
+  .schema-box pre { white-space: pre-wrap; font-size: 0.72rem; color: var(--ink); background: var(--card); padding: 10px; border-radius: 8px; }
+
+  /* Shopping list */
+  .shop-item {
+    display:flex; align-items:flex-start; gap:12px; padding: 10px 2px;
+    border-bottom: 1px solid var(--line); cursor: pointer;
+  }
+  .shop-item:last-child { border-bottom: none; }
+  .box {
+    flex-shrink: 0; width: 20px; height: 20px; margin-top: 1px; border-radius: 6px;
+    border: 2px solid var(--muted); display:flex; align-items:center; justify-content:center;
+  }
+  .box svg { width: 12px; height: 12px; opacity: 0; }
+  .shop-item.checked .box { background: var(--leaf); border-color: var(--leaf); }
+  .shop-item.checked .box svg { opacity: 1; }
+  .shop-item.checked .item-text { text-decoration: line-through; color: var(--muted); }
+  .item-text { font-size: 0.94rem; }
+  .empty-msg { color: var(--muted); font-size: 0.9rem; text-align: center; padding: 40px 20px; }
+
+  /* Settings */
+  .settings-card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 16px; margin-bottom: 14px; }
+  .settings-card h3 { margin: 0 0 8px; font-family: Georgia, serif; font-size: 1rem; }
+  .settings-card p { font-size: 0.85rem; color: var(--muted); margin: 0 0 10px; line-height: 1.4; }
+  .btn-row { display:flex; gap:8px; flex-wrap: wrap; }
+  .secondary-btn {
+    background: var(--cream); color: var(--leaf-dark); border: 1px solid var(--leaf);
+    padding: 9px 14px; border-radius: 8px; font-size: 0.85rem; font-weight: 600;
+  }
+  input[type="file"] { display: none; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>🍲 Rustle Up</h1>
+  <div class="tabs">
+    <button class="tab-btn active" id="tabRecipesBtn">Recipes</button>
+    <button class="tab-btn" id="tabShopBtn">Shopping List</button>
+    <button class="tab-btn" id="tabAddBtn">Add</button>
+    <button class="tab-btn" id="tabSettingsBtn">Settings</button>
+  </div>
+</header>
+
+<main id="main"></main>
+
+<script>
+/* ============================================================
+   THE RECIPE BOX — a fully local recipe manager + shopping list.
+   No backend, no API calls, no accounts. Everything lives in
+   IndexedDB on this device. Use Export/Import (Settings tab) to
+   move your library between devices or share with someone else.
+
+   To add a new recipe: photograph or paste it into a Claude chat
+   and ask for it in the JSON schema shown in the Add tab, then
+   paste the result here.
+   ============================================================ */
+
+const DB_NAME = "recipe-box";
+const DB_VERSION = 1;
+const STORE = "recipes";
+let db;
+let selectedForList = new Set(); // recipe ids chosen for the shopping list
+let shopChecked = {}; // persisted checked state for shopping list items
+let currentTab = "recipes";
+let currentSearch = "";
+let currentTagFilter = "";
+
+function openDB() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(DB_NAME, DB_VERSION);
+    req.onupgradeneeded = (e) => {
+      const database = e.target.result;
+      if (!database.objectStoreNames.contains(STORE)) {
+        database.createObjectStore(STORE, { keyPath: "id" });
+      }
+      if (!database.objectStoreNames.contains("meta")) {
+        database.createObjectStore("meta", { keyPath: "key" });
+      }
+    };
+    req.onsuccess = (e) => resolve(e.target.result);
+    req.onerror = (e) => reject(e.target.error);
+  });
+}
+
+function tx(storeName, mode) {
+  return db.transaction(storeName, mode).objectStore(storeName);
+}
+
+function getAllRecipes() {
+  return new Promise((resolve, reject) => {
+    const req = tx(STORE, "readonly").getAll();
+    req.onsuccess = () => resolve(req.result || []);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+function putRecipe(recipe) {
+  return new Promise((resolve, reject) => {
+    const req = tx(STORE, "readwrite").put(recipe);
+    req.onsuccess = () => resolve();
+    req.onerror = () => reject(req.error);
+  });
+}
+
+function deleteRecipe(id) {
+  return new Promise((resolve, reject) => {
+    const req = tx(STORE, "readwrite").delete(id);
+    req.onsuccess = () => resolve();
+    req.onerror = () => reject(req.error);
+  });
+}
+
+function getMeta(key) {
+  return new Promise((resolve) => {
+    const req = tx("meta", "readonly").get(key);
+    req.onsuccess = () => resolve(req.result ? req.result.value : null);
+    req.onerror = () => resolve(null);
+  });
+}
+
+function setMeta(key, value) {
+  return new Promise((resolve, reject) => {
+    const req = tx("meta", "readwrite").put({ key, value });
+    req.onsuccess = () => resolve();
+    req.onerror = () => reject(req.error);
+  });
+}
+
+function slugify(str) {
+  return str.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+}
+
+/* ---------- Seed data: the recipes already on hand ---------- */
+const SEED_RECIPES = [
+  {
+    id: "mothership-overnight-oats",
+    title: "Mothership Overnight Oats",
+    source: "Cookbook (adapted)",
+    tags: ["breakfast", "batch-prep", "vegetarian"],
+    servesLabel: "Makes 6 portions",
+    time: "10 min + overnight soak",
+    ingredients: [
+      "2 ripe bananas (320g)",
+      "700ml semi-skimmed milk or unsweetened fortified plant milk",
+      "2 teaspoons vanilla bean paste",
+      "300g porridge oats",
+      "2 eating apples"
+    ],
+    method: [
+      "Blend the peeled bananas with the milk and vanilla bean paste until smooth, then pour over the oats in a large bowl.",
+      "Coarsely grate in the apples and stir well.",
+      "Cover and refrigerate overnight.",
+      "The next day, stir well and loosen with a splash more milk if needed. Serve as is, or top with seasonal fruit, nuts or seeds."
+    ],
+    notes: "Keeps in the fridge for several days. Easy to halve for one person (220g per portion).",
+    dateAdded: "2026-07-11"
+  },
+  {
+    id: "comforting-chickpea-cauliflower-soup",
+    title: "Comforting Chickpea & Cauliflower Soup",
+    source: "Cookbook (adapted)",
+    tags: ["soup", "curry", "vegetarian", "batch-prep"],
+    servesLabel: "Serves 4",
+    time: "Prep 15 min, cook 25 min",
+    ingredients: [
+      "4cm piece of ginger",
+      "4 cloves of garlic",
+      "2 onions (320g)",
+      "1 small handful of curry leaves",
+      "1 head of cauliflower (800g)",
+      "500g potatoes",
+      "3 tablespoons curry paste",
+      "60g coconut cream",
+      "2 x 400g tins of chickpeas",
+      "200g ripe mixed-colour cherry tomatoes"
+    ],
+    method: [
+      "Finely chop the ginger, garlic and onion, and cook in a large pan with a little oil and the curry leaves over medium heat.",
+      "Chop the potatoes and cauliflower into rough dice and add to the pan, cooking for around 10 minutes, stirring regularly.",
+      "Stir in the coconut cream, then add the chickpeas (with their liquid) and enough boiling water to just cover. Cover and simmer.",
+      "Blend roughly half the soup until smooth, then stir back through the rest for a creamier texture.",
+      "Divide between bowls, top with quartered cherry tomatoes, and drizzle with olive oil if you like."
+    ],
+    notes: "Inspired by aloo gobi. Good with warmed flatbread.",
+    dateAdded: "2026-07-11"
+  },
+  {
+    id: "super-green-orecchiette",
+    title: "Super-Green Orecchiette",
+    source: "Cookbook (adapted)",
+    tags: ["pasta", "vegetarian", "weeknight"],
+    servesLabel: "Serves 4",
+    time: "24 min",
+    ingredients: [
+      "80g rosemary focaccia",
+      "4 cloves of garlic",
+      "1 head of broccoli (320g)",
+      "320g baby spinach",
+      "50g Parmesan cheese",
+      "1 lemon",
+      "dried red chilli flakes",
+      "300g dried orecchiette",
+      "320g frozen peas",
+      "4 tablespoons cottage cheese"
+    ],
+    method: [
+      "Blitz the focaccia into fine crumbs and toast in a dry pan until golden; set aside.",
+      "Boil the whole garlic cloves in salted water. Cut the broccoli into florets, roughly chop the stalk, and add the stalk to the water along with the spinach for the final minute.",
+      "Lift out the broccoli stalk, spinach and garlic (reserve the water for the pasta) and blend with lemon juice, grated Parmesan, chilli flakes and olive oil into a smooth green sauce. Season to taste.",
+      "Cook the orecchiette in the same pot of water according to packet instructions, adding the broccoli florets and peas for the final 2 minutes.",
+      "Drain, reserving a mugful of pasta water, then toss the pasta with the green sauce, loosening with a little pasta water if needed.",
+      "Divide between bowls, spoon over the cottage cheese, and scatter with the crispy crumbs and a pinch of chilli flakes."
+    ],
+    notes: "",
+    dateAdded: "2026-07-11"
+  },
+  {
+    id: "creamy-peanut-chicken",
+    title: "Creamy Peanut Chicken",
+    source: "Cookbook (adapted)",
+    tags: ["chicken", "quick", "weeknight"],
+    servesLabel: "Serves 2",
+    time: "10 min",
+    ingredients: [
+      "2 mixed-colour peppers (320g)",
+      "2 x 150g skinless chicken breasts",
+      "2 cloves of garlic",
+      "6cm piece of ginger",
+      "2 limes",
+      "1 tablespoon low-salt soy sauce",
+      "2 heaped tablespoons peanut butter",
+      "\u00bd a bunch of coriander (15g)",
+      "160g sugar snap peas",
+      "60g dried mango"
+    ],
+    method: [
+      "Slice the peppers into thick strips, discarding the seeds, and dry-fry in a hot pan for 2 minutes.",
+      "Slice the chicken into 1cm strips, season, add to the pan with a little oil, and cook for about 4 minutes until golden, tossing regularly.",
+      "Meanwhile, blend the garlic, ginger, lime juice, soy sauce, peanut butter, coriander stalks and a splash of water into a smooth sauce, and season to taste.",
+      "Add the sugar snaps and dried mango to the pan, pour in the sauce, and let it bubble for 2 minutes.",
+      "Plate up, scatter with coriander leaves, and serve with lime wedges and rice or noodles."
+    ],
+    notes: "",
+    dateAdded: "2026-07-11"
+  },
+  {
+    id: "easy-prawn-curry",
+    title: "Easy Prawn Curry",
+    source: "Cookbook (adapted)",
+    tags: ["seafood", "curry", "quick"],
+    servesLabel: "Serves 2",
+    time: "10 min",
+    ingredients: [
+      "1 onion (160g)",
+      "250g ripe cherry tomatoes",
+      "1 x 50g sachet of creamed coconut",
+      "1 x 400g tin of chickpeas",
+      "1 bunch of coriander (30g)",
+      "2 tablespoons curry paste",
+      "250g frozen mango",
+      "165g raw peeled king prawns",
+      "1 x 250g packet of cooked wholegrain basmati rice",
+      "30g Bombay mix"
+    ],
+    method: [
+      "Finely slice the onion and dry-fry with the tomatoes for about 4 minutes.",
+      "Meanwhile, blend the creamed coconut, chickpeas (with their liquid), half the coriander leaves and a splash of water into a sauce, along with half the cooked onion and tomato.",
+      "Stir the curry paste and a little oil into the pan with the remaining onion and tomato, then add the mango and remaining chickpeas and toss for 2 minutes.",
+      "Pour in the blended sauce, add the prawns, and simmer until just cooked through, loosening with water if needed.",
+      "Cook the rice according to packet instructions and divide between plates. Stir most of the remaining coriander through the curry, spoon over the rice, and finish with crushed Bombay mix."
+    ],
+    notes: "",
+    dateAdded: "2026-07-11"
+  },
+  {
+    id: "chipotle-chicken-bean-soup",
+    title: "Chipotle Chicken & Bean Soup",
+    source: "Cookbook (adapted)",
+    tags: ["soup", "chicken", "batch-prep"],
+    servesLabel: "Serves 4",
+    time: "Prep 20 min, cook 1 hour",
+    ingredients: [
+      "4 large chicken thighs, skin on, bone in",
+      "320g button mushrooms",
+      "2 red onions (320g)",
+      "4 carrots (320g)",
+      "320g celery",
+      "4 teaspoons chipotle chilli paste",
+      "2 x 400g tins of butter beans",
+      "2 x 400g tins of plum tomatoes",
+      "1 small ripe avocado (160g)",
+      "1 lime"
+    ],
+    method: [
+      "Render the skin from the chicken thighs in a large casserole pan over medium heat, then remove and reserve the skin, leaving the fat behind.",
+      "Season the thighs and brown them in the pan while you trim the mushrooms and finely slice the onions, carrots and celery (reserving any celery leaves). Remove the chicken and cook the vegetables for about 10 minutes.",
+      "Stir in the chipotle paste, return the chicken to the pan, add the tomatoes (breaking them up) and a kettle's worth of water. Cover and simmer for 45 minutes.",
+      "Pull out the chicken and shred it, discarding the bones, then stir it back into the soup with the beans and simmer to your desired consistency.",
+      "Halve, destone, peel and dice the avocado, and dress with lime juice. Serve the soup topped with the avocado, reserved celery leaves, and crumbled crispy tortilla for crunch, if you like."
+    ],
+    notes: "Good with warmed or roasted corn tortillas on the side.",
+    dateAdded: "2026-07-11"
+  },
+  {
+    id: "golden-chicken-peppers-rice",
+    title: "Golden Chicken, Peppers & Rice",
+    source: "Cookbook (adapted)",
+    tags: ["chicken", "quick", "weeknight"],
+    servesLabel: "Serves 2",
+    time: "14 min",
+    ingredients: [
+      "160g kale",
+      "\u00bd a head of broccoli (160g)",
+      "1 red pepper (160g)",
+      "2 x 150g skinless chicken breasts",
+      "1 x 250g packet of cooked wholegrain rice",
+      "1 tablespoon harissa paste, plus extra to serve",
+      "1 lemon",
+      "30g feta cheese",
+      "2 heaped tablespoons houmous"
+    ],
+    method: [
+      "Tear the kale into a hot dry pan, discarding any tough stalks, and let it wilt and lightly char. Meanwhile cut the broccoli into small florets, slice the pepper, and cut the chicken into 1cm strips.",
+      "Once the kale has wilted, tip in the rice and harissa paste, add half the lemon juice, and toss over the heat for 2 minutes until hot through. Season and divide between plates.",
+      "Add a tablespoon of olive oil to the pan, then the chicken and broccoli. Season and cook for a few minutes until golden and cooked through, tossing regularly. Add the pepper partway through.",
+      "Divide the chicken, peppers and broccoli over the rice, crumble over the feta, and spoon over the houmous and a little extra harissa. Serve with the remaining lemon."
+    ],
+    notes: "",
+    dateAdded: "2026-07-11"
+  },
+  {
+    id: "sesame-miso-shred-salad",
+    title: "Sesame Miso Shred Salad",
+    source: "Cookbook (adapted)",
+    tags: ["salad", "side", "vegetarian", "quick"],
+    servesLabel: "Serves 1",
+    time: "12 min",
+    ingredients: [
+      "80g each of sugar snap peas, white cabbage, yellow pepper, carrot, asparagus",
+      "1 fresh red chilli",
+      "1 lime",
+      "1 heaped teaspoon tahini",
+      "1 heaped teaspoon white miso",
+      "1 heaped teaspoon toasted sesame seeds",
+      "2 sprigs of coriander"
+    ],
+    method: [
+      "Trim or deseed the vegetables as needed, then finely shred them all, by hand or with a food processor attachment.",
+      "Finely chop the chilli and scrunch it through the shredded veg with the lime juice, tahini, miso and a little extra virgin olive oil.",
+      "Season to taste, then scatter over the sesame seeds and pick over the coriander leaves.",
+      "Good as a side with wholegrain rice or noodles."
+    ],
+    notes: "",
+    dateAdded: "2026-07-11"
+  }
+];
+
+/* ---------- Rendering ---------- */
+
+async function seedIfEmpty() {
+  const existing = await getAllRecipes();
+  if (existing.length === 0) {
+    for (const r of SEED_RECIPES) await putRecipe(r);
+  }
+}
+
+function allTags(recipes) {
+  const s = new Set();
+  recipes.forEach(r => (r.tags || []).forEach(t => s.add(t)));
+  return Array.from(s).sort();
+}
+
+async function renderRecipes() {
+  const main = document.getElementById("main");
+  const recipes = await getAllRecipes();
+  recipes.sort((a, b) => a.title.localeCompare(b.title));
+
+  const filtered = recipes.filter(r => {
+    const matchesSearch = !currentSearch || r.title.toLowerCase().includes(currentSearch.toLowerCase()) ||
+      (r.ingredients || []).some(i => i.toLowerCase().includes(currentSearch.toLowerCase()));
+    const matchesTag = !currentTagFilter || (r.tags || []).includes(currentTagFilter);
+    return matchesSearch && matchesTag;
+  });
+
+  const tags = allTags(recipes);
+
+  let html = `<div class="toolbar">
+    <input type="text" id="searchInput" placeholder="Search recipes or ingredients..." value="${escapeAttr(currentSearch)}">
+    <select id="tagSelect">
+      <option value="">All tags</option>
+      ${tags.map(t => `<option value="${escapeAttr(t)}" ${t === currentTagFilter ? "selected" : ""}>${escapeHtml(t)}</option>`).join("")}
+    </select>
+  </div>`;
+
+  if (selectedForList.size > 0) {
+    html += `<div class="status-msg status-ok">${selectedForList.size} recipe(s) selected for shopping list. Go to the Shopping List tab to build it.</div>`;
+  }
+
+  if (filtered.length === 0) {
+    html += `<div class="empty-msg">No recipes match yet. Add one from the Add tab, or clear your search.</div>`;
+  } else {
+    filtered.forEach(r => {
+      const isSelected = selectedForList.has(r.id);
+      html += `<div class="recipe-card" data-id="${escapeAttr(r.id)}">
+        <h3>${escapeHtml(r.title)}</h3>
+        <div class="recipe-meta">${escapeHtml(r.servesLabel || "")} ${r.servesLabel && r.time ? "&middot;" : ""} ${escapeHtml(r.time || "")}</div>
+        <div class="tag-row">${(r.tags || []).map(t => `<span class="tag">${escapeHtml(t)}</span>`).join("")}</div>
+        <div class="card-actions">
+          <button class="mini-btn ${isSelected ? "selected" : ""}" data-action="select" data-id="${escapeAttr(r.id)}">${isSelected ? "✓ In list" : "+ Add to list"}</button>
+          <button class="mini-btn danger" data-action="delete" data-id="${escapeAttr(r.id)}">Delete</button>
+        </div>
+      </div>`;
+    });
+  }
+
+  main.innerHTML = html;
+
+  document.getElementById("searchInput").addEventListener("input", (e) => {
+    currentSearch = e.target.value;
+    renderRecipes();
+  });
+  document.getElementById("tagSelect").addEventListener("change", (e) => {
+    currentTagFilter = e.target.value;
+    renderRecipes();
+  });
+
+  main.querySelectorAll(".recipe-card").forEach(card => {
+    card.addEventListener("click", (e) => {
+      if (e.target.closest("button")) return;
+      renderDetail(card.dataset.id);
+    });
+  });
+  main.querySelectorAll('[data-action="select"]').forEach(btn => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const id = btn.dataset.id;
+      if (selectedForList.has(id)) selectedForList.delete(id);
+      else selectedForList.add(id);
+      renderRecipes();
+    });
+  });
+  main.querySelectorAll('[data-action="delete"]').forEach(btn => {
+    btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      if (!confirm("Delete this recipe? This can't be undone (unless you have an exported backup).")) return;
+      await deleteRecipe(btn.dataset.id);
+      selectedForList.delete(btn.dataset.id);
+      renderRecipes();
+    });
+  });
+}
+
+async function renderDetail(id) {
+  const main = document.getElementById("main");
+  const recipes = await getAllRecipes();
+  const r = recipes.find(x => x.id === id);
+  if (!r) { renderRecipes(); return; }
+
+  main.innerHTML = `
+    <button class="back-btn" id="backBtn">&larr; Back to recipes</button>
+    <div class="detail-card">
+      <h2>${escapeHtml(r.title)}</h2>
+      <div class="recipe-meta">${escapeHtml(r.servesLabel || "")} ${r.servesLabel && r.time ? "&middot;" : ""} ${escapeHtml(r.time || "")} ${r.source ? "&middot; " + escapeHtml(r.source) : ""}</div>
+      <div class="tag-row">${(r.tags || []).map(t => `<span class="tag">${escapeHtml(t)}</span>`).join("")}</div>
+
+      <div class="section-label">Ingredients</div>
+      <ul class="ing-list">${(r.ingredients || []).map(i => `<li>${escapeHtml(i)}</li>`).join("")}</ul>
+
+      <div class="section-label">Method</div>
+      <ol class="method-list">${(r.method || []).map(m => `<li>${escapeHtml(m)}</li>`).join("")}</ol>
+
+      ${r.notes ? `<div class="section-label">Notes</div><div class="notes-box">${escapeHtml(r.notes)}</div>` : ""}
+    </div>
+  `;
+  document.getElementById("backBtn").addEventListener("click", renderRecipes);
+}
+
+/* ---------- Shopping list ---------- */
+
+async function renderShoppingList() {
+  const main = document.getElementById("main");
+  const recipes = await getAllRecipes();
+  const chosen = recipes.filter(r => selectedForList.has(r.id));
+
+  if (chosen.length === 0) {
+    main.innerHTML = `<div class="empty-msg">No recipes selected yet. Head to the Recipes tab and tap "+ Add to list" on the ones you're cooking this week.</div>`;
+    return;
+  }
+
+  const savedChecked = await getMeta("shopChecked");
+  shopChecked = savedChecked || {};
+
+  // Build a flat, tagged ingredient list, grouped by recipe for now
+  // (kept simple and literal here -- no auto-merge of quantities,
+  // since that needs judgement a plain script can't safely do).
+  let html = `<div class="status-msg status-ok">Shopping list for: ${chosen.map(r => escapeHtml(r.title)).join(", ")}</div>`;
+  html += `<div class="btn-row" style="margin:12px 0;"><button class="secondary-btn" id="clearSelectionBtn">Clear selection</button><button class="secondary-btn" id="uncheckAllBtn">Uncheck all</button></div>`;
+
+  chosen.forEach(r => {
+    html += `<div class="section-label">${escapeHtml(r.title)}</div><div>`;
+    (r.ingredients || []).forEach((ing, idx) => {
+      const key = r.id + "::" + idx;
+      const isChecked = !!shopChecked[key];
+      html += `<div class="shop-item ${isChecked ? "checked" : ""}" data-key="${escapeAttr(key)}">
+        <div class="box"><svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg></div>
+        <div class="item-text">${escapeHtml(ing)}</div>
+      </div>`;
+    });
+    html += `</div>`;
+  });
+
+  main.innerHTML = html;
+
+  main.querySelectorAll(".shop-item").forEach(el => {
+    el.addEventListener("click", async () => {
+      const key = el.dataset.key;
+      shopChecked[key] = !shopChecked[key];
+      await setMeta("shopChecked", shopChecked);
+      el.classList.toggle("checked");
+    });
+  });
+  document.getElementById("clearSelectionBtn").addEventListener("click", () => {
+    selectedForList.clear();
+    renderShoppingList();
+  });
+  document.getElementById("uncheckAllBtn").addEventListener("click", async () => {
+    shopChecked = {};
+    await setMeta("shopChecked", shopChecked);
+    renderShoppingList();
+  });
+}
+
+/* ---------- Add recipe (paste JSON) ---------- */
+
+const SCHEMA_EXAMPLE = {
+  id: "short-unique-slug",
+  title: "Recipe Title",
+  source: "e.g. cookbook name, page, or website",
+  tags: ["chicken", "quick", "weeknight"],
+  servesLabel: "Serves 2 (or 'Makes 6 portions')",
+  time: "20 min",
+  ingredients: ["200g chicken breast", "1 lemon"],
+  method: ["Step one.", "Step two."],
+  notes: "Optional tips or variations.",
+  dateAdded: "2026-07-11"
+};
+
+function renderAdd(statusMsg) {
+  const main = document.getElementById("main");
+  main.innerHTML = `
+    <div class="settings-card">
+      <h3>Add a recipe</h3>
+      <p>Paste a single recipe object, or an array of several, in the schema below. The easiest way to get this: send a photo or text of the recipe to Claude in a normal chat and ask it to return the recipe in this exact JSON schema.</p>
+      <textarea id="jsonInput" placeholder="Paste recipe JSON here..."></textarea>
+      <button class="primary-btn" id="importJsonBtn">Add to Rustle Up</button>
+      ${statusMsg ? statusMsg : ""}
+    </div>
+    <div class="schema-box">
+      <strong>Schema to send Claude / paste here:</strong>
+      <pre>${escapeHtml(JSON.stringify(SCHEMA_EXAMPLE, null, 2))}</pre>
+      <div>Only <code>title</code> and <code>ingredients</code> are required — everything else is optional. If <code>id</code> is missing, one is generated from the title.</div>
+    </div>
+  `;
+  document.getElementById("importJsonBtn").addEventListener("click", handleJsonImport);
+}
+
+async function handleJsonImport() {
+  const raw = document.getElementById("jsonInput").value.trim();
+  if (!raw) return;
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (e) {
+    renderAdd(`<div class="status-msg status-err">Couldn't parse that as JSON: ${escapeHtml(e.message)}</div>`);
+    return;
+  }
+  const items = Array.isArray(parsed) ? parsed : [parsed];
+  let added = 0;
+  let skipped = 0;
+  for (const item of items) {
+    if (!item.title || !item.ingredients) { skipped++; continue; }
+    const recipe = {
+      id: item.id ? slugify(item.id) : slugify(item.title) + "-" + Date.now().toString(36).slice(-4),
+      title: item.title,
+      source: item.source || "",
+      tags: item.tags || [],
+      servesLabel: item.servesLabel || (item.serves ? `Serves ${item.serves}` : ""),
+      time: item.time || "",
+      ingredients: item.ingredients || [],
+      method: item.method || [],
+      notes: item.notes || "",
+      dateAdded: item.dateAdded || new Date().toISOString().slice(0, 10)
+    };
+    await putRecipe(recipe);
+    added++;
+  }
+  renderAdd(`<div class="status-msg status-ok">Added ${added} recipe(s)${skipped ? `, skipped ${skipped} (missing title or ingredients)` : ""}.</div>`);
+}
+
+/* ---------- Settings: export / import full library ---------- */
+
+function renderSettings() {
+  const main = document.getElementById("main");
+  main.innerHTML = `
+    <div class="settings-card">
+      <h3>Export your library</h3>
+      <p>Download everything in your Rustle Up library as a single JSON file — useful for backups, or to share your library with your partner.</p>
+      <div class="btn-row"><button class="secondary-btn" id="exportBtn">Export as JSON</button></div>
+    </div>
+    <div class="settings-card">
+      <h3>Import a library</h3>
+      <p>Import a previously exported JSON file. Recipes are matched by id — importing will update recipes that already exist and add any new ones, without duplicating.</p>
+      <div class="btn-row">
+        <button class="secondary-btn" id="importBtn">Choose file to import</button>
+        <input type="file" id="fileInput" accept="application/json">
+      </div>
+      <div id="importStatus"></div>
+    </div>
+    <div class="settings-card">
+      <h3>About this app</h3>
+      <p>Everything here lives in this browser's IndexedDB — nothing is sent anywhere, and there's no account or server involved. Clearing your browser data will clear your recipes too, so export regularly if you want a backup.</p>
+    </div>
+  `;
+  document.getElementById("exportBtn").addEventListener("click", exportLibrary);
+  document.getElementById("importBtn").addEventListener("click", () => document.getElementById("fileInput").click());
+  document.getElementById("fileInput").addEventListener("change", handleFileImport);
+}
+
+async function exportLibrary() {
+  const recipes = await getAllRecipes();
+  const blob = new Blob([JSON.stringify(recipes, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `rustle-up-export-${new Date().toISOString().slice(0, 10)}.json`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function handleFileImport(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = async (ev) => {
+    try {
+      const parsed = JSON.parse(ev.target.result);
+      const items = Array.isArray(parsed) ? parsed : [parsed];
+      let count = 0;
+      for (const item of items) {
+        if (!item.title || !item.ingredients) continue;
+        const recipe = {
+          id: item.id || slugify(item.title) + "-" + Date.now().toString(36).slice(-4),
+          title: item.title,
+          source: item.source || "",
+          tags: item.tags || [],
+          servesLabel: item.servesLabel || "",
+          time: item.time || "",
+          ingredients: item.ingredients || [],
+          method: item.method || [],
+          notes: item.notes || "",
+          dateAdded: item.dateAdded || new Date().toISOString().slice(0, 10)
+        };
+        await putRecipe(recipe);
+        count++;
+      }
+      document.getElementById("importStatus").innerHTML = `<div class="status-msg status-ok">Imported ${count} recipe(s).</div>`;
+    } catch (err) {
+      document.getElementById("importStatus").innerHTML = `<div class="status-msg status-err">Import failed: ${escapeHtml(err.message)}</div>`;
+    }
+  };
+  reader.readAsText(file);
+}
+
+/* ---------- Utilities ---------- */
+
+function escapeHtml(str) {
+  return String(str).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+function escapeAttr(str) { return escapeHtml(str); }
+
+/* ---------- Tabs ---------- */
+
+function setTab(tab) {
+  currentTab = tab;
+  document.getElementById("tabRecipesBtn").classList.toggle("active", tab === "recipes");
+  document.getElementById("tabShopBtn").classList.toggle("active", tab === "shop");
+  document.getElementById("tabAddBtn").classList.toggle("active", tab === "add");
+  document.getElementById("tabSettingsBtn").classList.toggle("active", tab === "settings");
+  if (tab === "recipes") renderRecipes();
+  else if (tab === "shop") renderShoppingList();
+  else if (tab === "add") renderAdd();
+  else if (tab === "settings") renderSettings();
+}
+
+document.getElementById("tabRecipesBtn").addEventListener("click", () => setTab("recipes"));
+document.getElementById("tabShopBtn").addEventListener("click", () => setTab("shop"));
+document.getElementById("tabAddBtn").addEventListener("click", () => setTab("add"));
+document.getElementById("tabSettingsBtn").addEventListener("click", () => setTab("settings"));
+
+(async () => {
+  db = await openDB();
+  await seedIfEmpty();
+  setTab("recipes");
+})();
+
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("sw.js").catch((err) => {
+      console.error("Service worker registration failed:", err);
+    });
+  });
+}
+</script>
+</body>
+</html>
