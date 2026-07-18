@@ -205,3 +205,23 @@ input[type="file"] { display: none; }
   padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; font-size: 0.8rem; background: var(--card); color: var(--ink);
 }
 .staple-check { font-size:0.78rem; display:flex; align-items:center; gap:4px; white-space: nowrap; }
+
+/* Recipe scaling */
+.scale-row { display:flex; align-items:center; gap:8px; font-size: 0.85rem; margin: 10px 0; }
+.scale-row input[type="number"] {
+  width: 64px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px;
+  font-size: 0.9rem; background: var(--card); color: var(--ink);
+}
+
+/* Global undo toast */
+.undo-toast {
+  position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%);
+  background: var(--ink); color: #fff; padding: 12px 16px; border-radius: 10px;
+  display:flex; align-items:center; gap:16px; font-size:0.85rem;
+  box-shadow: 0 6px 20px rgba(0,0,0,0.28); z-index: 50; max-width: calc(100% - 36px);
+}
+.undo-toast.hidden { display: none; }
+.undo-toast button {
+  background:none; border:none; color:#bfe0c9; font-weight:700; font-size:0.85rem;
+  text-decoration:underline; flex-shrink:0; padding:0;
+}

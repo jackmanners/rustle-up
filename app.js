@@ -1,8 +1,6 @@
 /* ============================================================
    RUSTLE UP — a fully local recipe manager, meal planner and
-   shopping list. No backend, no API calls, no accounts.
-   Everything lives in IndexedDB on this device. Use Export/Import
-   (Settings tab) to move your library between devices.
+   shopping list. Everything lives in IndexedDB on this device.
 
    Data model:
    - recipes: the recipe library (IndexedDB object store).
@@ -25,8 +23,6 @@ let currentTab = "recipes";
 let currentSearch = "";
 let currentTagFilter = "";
 let pendingImport = null; // recipes parsed but awaiting serves confirmation
-let recipesFlash = ""; // one-shot status message shown on the Recipes tab
-let shopFlash = null; // { message, undo: async fn | null } shown on the Shopping List tab
 let showCheckedItems = false;
 
 const CATEGORY_ORDER = ["Produce", "Meat & Fish", "Dairy & Eggs", "Bakery", "Pantry", "Frozen", "Drinks", "Other"];
@@ -114,6 +110,32 @@ function slugify(str) {
   return str.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
 }
 
+/* ---------- Global undo toast ----------
+   Every destructive action (delete, clear, edit) routes through this
+   instead of a confirm() dialog: do the action immediately, then show
+   a toast with an Undo button for a few seconds. */
+
+let toastUndoFn = null;
+let toastRefreshFn = null;
+let toastTimer = null;
+
+function showToast(message, undoFn, refreshFn) {
+  clearTimeout(toastTimer);
+  toastUndoFn = undoFn || null;
+  toastRefreshFn = refreshFn || null;
+  const toast = document.getElementById("undoToast");
+  document.getElementById("undoToastMsg").textContent = message;
+  document.getElementById("undoToastBtn").style.display = undoFn ? "" : "none";
+  toast.classList.remove("hidden");
+  toastTimer = setTimeout(hideToast, 7000);
+}
+
+function hideToast() {
+  document.getElementById("undoToast").classList.add("hidden");
+  toastUndoFn = null;
+  toastRefreshFn = null;
+}
+
 /* ---------- Meta-backed collections ---------- */
 
 async function getMealPlan() { return (await getMeta("mealPlan")) || []; }
@@ -129,11 +151,10 @@ async function seedCatalogIfEmpty() {
   if (existing.length === 0) await saveIngredientCatalog(DEFAULT_INGREDIENT_CATALOG.map(e => ({ ...e })));
 }
 
-/* ---------- Ingredient quantity parsing & merging ----------
-   Best-effort: cookbook ingredient lines are messy free text, so
-   this only merges when it can confidently extract a quantity and
-   name. Anything it can't parse just becomes its own line -- same
-   safe fallback as before, but now it usually *can* merge. */
+/* ---------- Ingredient quantity parsing, merging & scaling ----------
+   Best-effort: cookbook ingredient lines are messy free text, so this
+   only merges/scales when it can confidently extract a quantity and
+   name. Anything it can't parse is left untouched. */
 
 const UNIT_MAP = {
   g: "g", gram: "g", grams: "g",
@@ -233,6 +254,19 @@ function formatItemText(item) {
   let text = qty ? `${qty} ${item.name}` : item.name;
   if (item.parenAmount != null) text += ` (${formatNum(item.parenAmount)}${item.parenUnit})`;
   return text;
+}
+
+function scaleIngredientLine(raw, factor) {
+  if (factor === 1) return raw;
+  const parsed = parseIngredient(raw);
+  if (parsed.amount == null) return raw;
+  return formatItemText({
+    amount: parsed.amount * factor,
+    unit: parsed.unit,
+    name: parsed.name,
+    parenAmount: parsed.parenAmount != null ? parsed.parenAmount * factor : null,
+    parenUnit: parsed.parenUnit
+  });
 }
 
 function matchCatalog(name, catalog) {
@@ -504,10 +538,47 @@ function searchRank(r, term) {
   return 4;
 }
 
+// Renders the toolbar (search/tag/add) once, then delegates the actual
+// list to renderRecipeList(). Typing in the search box only re-renders
+// the list container -- never the toolbar itself -- so the input never
+// loses focus (which would otherwise close the on-screen keyboard on
+// every keystroke).
 async function renderRecipes() {
   const main = document.getElementById("main");
   const recipes = await getAllRecipes();
   const planIds = await getMealPlan();
+  const tags = allTags(recipes);
+
+  main.innerHTML = `
+    <div class="toolbar">
+      <input type="text" id="searchInput" placeholder="Search recipes, tags, ingredients..." value="${escapeAttr(currentSearch)}">
+      <select id="tagSelect">
+        <option value="">All tags</option>
+        ${tags.map(t => `<option value="${escapeAttr(t)}" ${t === currentTagFilter ? "selected" : ""}>${escapeHtml(t)}</option>`).join("")}
+      </select>
+      <button class="secondary-btn" id="openAddBtn" title="Add a recipe">+ Add recipe</button>
+    </div>
+    <div id="recipeListArea"></div>
+  `;
+
+  const rerenderList = () => renderRecipeList(recipes, planIds);
+
+  document.getElementById("searchInput").addEventListener("input", (e) => {
+    currentSearch = e.target.value;
+    rerenderList();
+  });
+  document.getElementById("tagSelect").addEventListener("change", (e) => {
+    currentTagFilter = e.target.value;
+    rerenderList();
+  });
+  document.getElementById("openAddBtn").addEventListener("click", () => renderAdd());
+
+  rerenderList();
+}
+
+function renderRecipeList(recipes, planIds) {
+  const listArea = document.getElementById("recipeListArea");
+  if (!listArea) return;
 
   let filtered = recipes.filter(r => {
     const matchesTag = !currentTagFilter || (r.tags || []).includes(currentTagFilter);
@@ -524,24 +595,9 @@ async function renderRecipes() {
     filtered.sort((a, b) => a.title.localeCompare(b.title));
   }
 
-  const tags = allTags(recipes);
-
-  let html = `<div class="toolbar">
-    <input type="text" id="searchInput" placeholder="Search recipes, tags, ingredients..." value="${escapeAttr(currentSearch)}">
-    <select id="tagSelect">
-      <option value="">All tags</option>
-      ${tags.map(t => `<option value="${escapeAttr(t)}" ${t === currentTagFilter ? "selected" : ""}>${escapeHtml(t)}</option>`).join("")}
-    </select>
-    <button class="secondary-btn" id="openAddBtn" title="Add a recipe">+ Add recipe</button>
-  </div>`;
-
-  if (recipesFlash) {
-    html += `<div class="status-msg status-ok">${escapeHtml(recipesFlash)}</div>`;
-    recipesFlash = "";
-  }
-
+  let html = "";
   if (filtered.length === 0) {
-    html += `<div class="empty-msg">No recipes match yet. Tap "+ Add recipe" above, or clear your search.</div>`;
+    html += `<div class="empty-msg">No matches. Tap "+ Add recipe" above, or clear your search.</div>`;
   } else {
     filtered.forEach(r => {
       const inPlan = planIds.includes(r.id);
@@ -559,25 +615,15 @@ async function renderRecipes() {
     });
   }
 
-  main.innerHTML = html;
+  listArea.innerHTML = html;
 
-  document.getElementById("searchInput").addEventListener("input", (e) => {
-    currentSearch = e.target.value;
-    renderRecipes();
-  });
-  document.getElementById("tagSelect").addEventListener("change", (e) => {
-    currentTagFilter = e.target.value;
-    renderRecipes();
-  });
-  document.getElementById("openAddBtn").addEventListener("click", () => renderAdd());
-
-  main.querySelectorAll(".recipe-card").forEach(card => {
+  listArea.querySelectorAll(".recipe-card").forEach(card => {
     card.addEventListener("click", (e) => {
       if (e.target.closest("button") || e.target.closest("a")) return;
       renderDetail(card.dataset.id);
     });
   });
-  main.querySelectorAll('[data-action="plan-toggle"]').forEach(btn => {
+  listArea.querySelectorAll('[data-action="plan-toggle"]').forEach(btn => {
     btn.addEventListener("click", async (e) => {
       e.stopPropagation();
       const r = recipes.find(x => x.id === btn.dataset.id);
@@ -585,20 +631,32 @@ async function renderRecipes() {
       const planIdsNow = await getMealPlan();
       if (planIdsNow.includes(r.id)) {
         await removeRecipeFromMealPlan(r.id);
-        recipesFlash = `Removed "${r.title}" from your meal plan.`;
+        showToast(`Removed "${r.title}" from meal plan.`, async () => {
+          const plan = await getMealPlan();
+          if (!plan.includes(r.id)) { plan.push(r.id); await saveMealPlan(plan); }
+        }, renderRecipes);
       } else {
         const result = await addRecipeToMealPlan(r);
-        recipesFlash = `Added "${r.title}" to your meal plan (${result.added} new item(s), ${result.merged} merged into existing lines).`;
+        showToast(`Added to meal plan (${result.added} new, ${result.merged} merged).`, null, null);
       }
       renderRecipes();
     });
   });
-  main.querySelectorAll('[data-action="delete"]').forEach(btn => {
+  listArea.querySelectorAll('[data-action="delete"]').forEach(btn => {
     btn.addEventListener("click", async (e) => {
       e.stopPropagation();
-      if (!confirm("Delete this recipe? This can't be undone (unless you have an exported backup).")) return;
-      await deleteRecipe(btn.dataset.id);
-      await removeRecipeFromMealPlan(btn.dataset.id);
+      const r = recipes.find(x => x.id === btn.dataset.id);
+      if (!r) return;
+      const wasInPlan = (await getMealPlan()).includes(r.id);
+      await deleteRecipe(r.id);
+      await removeRecipeFromMealPlan(r.id);
+      showToast(`Deleted "${r.title}".`, async () => {
+        await putRecipe(r);
+        if (wasInPlan) {
+          const plan = await getMealPlan();
+          if (!plan.includes(r.id)) { plan.push(r.id); await saveMealPlan(plan); }
+        }
+      }, renderRecipes);
       renderRecipes();
     });
   });
@@ -612,16 +670,16 @@ function sourceLineHtml(r) {
   return `<div class="recipe-meta">${escapeHtml(r.source)}</div>`;
 }
 
-async function renderDetail(id, flash) {
+async function renderDetail(id) {
   const main = document.getElementById("main");
   const recipes = await getAllRecipes();
   const r = recipes.find(x => x.id === id);
   if (!r) { renderRecipes(); return; }
   const planIds = await getMealPlan();
   const inPlan = planIds.includes(r.id);
+  const baseServes = r.serves || detectDefaultServes(r);
 
   main.innerHTML = `
-    ${flash ? `<div class="status-msg status-ok">${escapeHtml(flash)}</div>` : ""}
     <button class="back-btn" id="backBtn">&larr; Back to recipes</button>
     <div class="detail-card">
       <h2>${escapeHtml(r.title)}</h2>
@@ -632,7 +690,11 @@ async function renderDetail(id, flash) {
       <div class="tag-row">${(r.tags || []).map(t => `<span class="tag">${escapeHtml(t)}</span>`).join("")}</div>
 
       <div class="section-label">Ingredients</div>
-      <ul class="ing-list">${(r.ingredients || []).map(i => `<li>${escapeHtml(i)}</li>`).join("")}</ul>
+      ${baseServes ? `<div class="scale-row">
+        <label for="scaleServes">Scale to serves</label>
+        <input type="number" min="1" id="scaleServes" value="${baseServes}">
+      </div>` : ""}
+      <ul class="ing-list" id="ingList">${(r.ingredients || []).map(i => `<li>${escapeHtml(i)}</li>`).join("")}</ul>
 
       <div class="section-label">Method</div>
       <ol class="method-list">${(r.method || []).map(m => `<li>${escapeHtml(m)}</li>`).join("")}</ol>
@@ -649,13 +711,27 @@ async function renderDetail(id, flash) {
   document.getElementById("planToggleBtn").addEventListener("click", async () => {
     if (inPlan) {
       await removeRecipeFromMealPlan(r.id);
-      renderDetail(r.id, `Removed "${r.title}" from your meal plan.`);
+      showToast("Removed from meal plan.", async () => {
+        const plan = await getMealPlan();
+        if (!plan.includes(r.id)) { plan.push(r.id); await saveMealPlan(plan); }
+      }, () => renderDetail(r.id));
     } else {
       const result = await addRecipeToMealPlan(r);
-      renderDetail(r.id, `Added to your meal plan (${result.added} new item(s), ${result.merged} merged into existing lines).`);
+      showToast(`Added to meal plan (${result.added} new, ${result.merged} merged).`, null, null);
     }
+    renderDetail(r.id);
   });
   document.getElementById("editBtn").addEventListener("click", () => renderRecipeForm(r));
+
+  const scaleInput = document.getElementById("scaleServes");
+  if (scaleInput) {
+    scaleInput.addEventListener("input", () => {
+      const target = Number(scaleInput.value);
+      const factor = target > 0 ? target / baseServes : 1;
+      document.getElementById("ingList").innerHTML =
+        (r.ingredients || []).map(i => `<li>${escapeHtml(scaleIngredientLine(i, factor))}</li>`).join("");
+    });
+  }
 }
 
 /* ---------- Meal plan ---------- */
@@ -716,10 +792,10 @@ async function renderMealPlan() {
   const planned = planIds.map(id => recipes.find(r => r.id === id)).filter(Boolean);
   planned.sort((a, b) => a.title.localeCompare(b.title));
 
-  let html = `<p class="intro-note">Recipes you're cooking this period. Adding one here merges its ingredients into your Shopping List, tagged with which meal they're for.</p>`;
+  let html = `<p class="intro-note">Recipes you're cooking this period.</p>`;
 
   if (planned.length === 0) {
-    html += `<div class="empty-msg">No meals planned yet. Head to Recipes and tap "+ Add to meal plan" on what you're cooking.</div>`;
+    html += `<div class="empty-msg">Nothing planned yet -- add a recipe from the Recipes tab.</div>`;
   } else {
     planned.forEach(r => {
       const metaParts = [r.servesLabel, r.time].filter(Boolean).join(" &middot; ");
@@ -745,7 +821,13 @@ async function renderMealPlan() {
   main.querySelectorAll('[data-action="remove-plan"]').forEach(btn => {
     btn.addEventListener("click", async (e) => {
       e.stopPropagation();
-      await removeRecipeFromMealPlan(btn.dataset.id);
+      const id = btn.dataset.id;
+      const r = recipes.find(x => x.id === id);
+      await removeRecipeFromMealPlan(id);
+      showToast(`Removed "${r ? r.title : "recipe"}" from plan.`, async () => {
+        const plan = await getMealPlan();
+        if (!plan.includes(id)) { plan.push(id); await saveMealPlan(plan); }
+      }, renderMealPlan);
       renderMealPlan();
     });
   });
@@ -801,11 +883,10 @@ async function copyShoppingListText() {
   const text = buildShoppingListText(items);
   try {
     await navigator.clipboard.writeText(text);
-    shopFlash = { message: "Copied! Paste it into your notes app.", undo: null };
+    showToast("Copied! Paste it into your notes app.", null, null);
   } catch (e) {
-    shopFlash = { message: "Couldn't copy automatically -- try again, or select and copy manually.", undo: null };
+    showToast("Couldn't copy automatically -- try again.", null, null);
   }
-  renderShoppingList();
 }
 
 async function renderShoppingList() {
@@ -819,20 +900,16 @@ async function renderShoppingList() {
   let html = `<div class="add-item-row">
     <input type="text" id="newItemInput" placeholder="Add an item...">
     <button class="primary-btn" id="addItemBtn" style="margin-top:0;">Add</button>
+  </div>
+  <div class="btn-row" style="margin-bottom:14px;">
+    <button class="secondary-btn" id="manageIngredientsBtn">Manage ingredients</button>
   </div>`;
 
-  if (shopFlash) {
-    html += `<div class="status-msg status-ok with-action">
-      <span>${escapeHtml(shopFlash.message)}</span>
-      ${shopFlash.undo ? `<button class="link-btn" id="undoBtn">Undo</button>` : ""}
-    </div>`;
-  }
-
   if (items.length === 0) {
-    html += `<div class="empty-msg">Your shopping list is empty. Add items above, or head to the Meal Plan tab and add a recipe.</div>`;
+    html += `<div class="empty-msg">Empty. Add items above, or add a recipe from Meal Plan.</div>`;
   } else {
     if (nonStaple.length === 0 && staples.length === 0) {
-      html += `<div class="empty-msg">Everything's checked off!${checked.length ? " Tap “Show checked” below to review." : ""}</div>`;
+      html += `<div class="empty-msg">Everything's checked off!${checked.length ? " Tap “Show checked” below." : ""}</div>`;
     }
     CATEGORY_ORDER.forEach(cat => {
       const group = nonStaple.filter(i => i.category === cat).sort((a, b) => a.name.localeCompare(b.name));
@@ -841,8 +918,7 @@ async function renderShoppingList() {
     });
     if (staples.length > 0) {
       html += `<div class="staple-section">
-        <div class="section-label">Staples (probably already in the cupboard)</div>
-        <div class="staple-hint">Flagged just in case -- check your stock before buying.</div>
+        <div class="section-label">Staples</div>
         <div>${staples.sort((a, b) => a.name.localeCompare(b.name)).map(i => renderShopItem(i, { hideBadge: true })).join("")}</div>
       </div>`;
     }
@@ -852,7 +928,7 @@ async function renderShoppingList() {
     if (checked.length > 0) {
       html += `<button class="secondary-btn" id="toggleCheckedBtn">${showCheckedItems ? "Hide" : "Show"} checked (${checked.length})</button>`;
     }
-    html += `<button class="secondary-btn" id="clearCheckedBtn">Clear checked items</button><button class="secondary-btn" id="clearAllBtn">Clear whole list</button></div>`;
+    html += `<button class="secondary-btn" id="clearCheckedBtn">Clear checked</button><button class="secondary-btn" id="clearAllBtn">Clear all</button></div>`;
 
     if (showCheckedItems && checked.length > 0) {
       html += `<div class="section-label">Checked off</div><div>${checked.sort((a, b) => a.name.localeCompare(b.name)).map(i => renderShopItem(i)).join("")}</div>`;
@@ -865,13 +941,7 @@ async function renderShoppingList() {
   document.getElementById("newItemInput").addEventListener("keydown", (e) => {
     if (e.key === "Enter") addManualItem();
   });
-
-  const undoBtn = document.getElementById("undoBtn");
-  if (undoBtn) undoBtn.addEventListener("click", async () => {
-    if (shopFlash && shopFlash.undo) await shopFlash.undo();
-    shopFlash = null;
-    renderShoppingList();
-  });
+  document.getElementById("manageIngredientsBtn").addEventListener("click", renderIngredientCatalog);
 
   main.querySelectorAll(".shop-item").forEach(el => {
     const id = el.dataset.id;
@@ -883,17 +953,12 @@ async function renderShoppingList() {
       item.checked = !item.checked;
       await saveShopItems(all);
       if (item.checked) {
-        shopFlash = {
-          message: `Checked off "${item.name}".`,
-          undo: async () => {
-            const all2 = await getShopItems();
-            const it2 = all2.find(i => i.id === id);
-            if (it2) it2.checked = false;
-            await saveShopItems(all2);
-          }
-        };
-      } else {
-        shopFlash = null;
+        showToast(`Checked off "${item.name}".`, async () => {
+          const all2 = await getShopItems();
+          const it2 = all2.find(i => i.id === id);
+          if (it2) it2.checked = false;
+          await saveShopItems(all2);
+        }, renderShoppingList);
       }
       renderShoppingList();
     });
@@ -909,7 +974,13 @@ async function renderShoppingList() {
       delBtn.addEventListener("click", async (e) => {
         e.stopPropagation();
         const all = await getShopItems();
+        const item = all.find(i => i.id === id);
         await saveShopItems(all.filter(i => i.id !== id));
+        showToast(`Removed "${item.name}".`, async () => {
+          const cur = await getShopItems();
+          cur.push(item);
+          await saveShopItems(cur);
+        }, renderShoppingList);
         renderShoppingList();
       });
     }
@@ -928,25 +999,18 @@ async function renderShoppingList() {
     const removed = all.filter(i => i.checked);
     if (removed.length === 0) return;
     await saveShopItems(all.filter(i => !i.checked));
-    shopFlash = {
-      message: `Cleared ${removed.length} checked item(s).`,
-      undo: async () => {
-        const cur = await getShopItems();
-        await saveShopItems(cur.concat(removed));
-      }
-    };
+    showToast(`Cleared ${removed.length} checked item(s).`, async () => {
+      const cur = await getShopItems();
+      await saveShopItems(cur.concat(removed));
+    }, renderShoppingList);
     renderShoppingList();
   });
   const clearAllBtn = document.getElementById("clearAllBtn");
   if (clearAllBtn) clearAllBtn.addEventListener("click", async () => {
     const all = await getShopItems();
     if (all.length === 0) return;
-    if (!confirm("Clear the entire shopping list?")) return;
     await saveShopItems([]);
-    shopFlash = {
-      message: `Cleared the whole list (${all.length} item(s)).`,
-      undo: async () => { await saveShopItems(all); }
-    };
+    showToast(`Cleared the whole list (${all.length} item(s)).`, async () => { await saveShopItems(all); }, renderShoppingList);
     renderShoppingList();
   });
 }
@@ -987,6 +1051,93 @@ function startEditItem(el, id) {
   input.addEventListener("click", (e) => e.stopPropagation());
 }
 
+/* ---------- Ingredient catalog (its own screen, reached from Shopping List) ---------- */
+
+function renderIngredientCatalogSection(catalog) {
+  const rows = catalog.slice().sort((a, b) => a.name.localeCompare(b.name)).map(entry => `
+    <div class="ingredient-row" data-id="${escapeAttr(entry.id)}">
+      <input type="text" class="ing-name" value="${escapeAttr(entry.name)}">
+      <select class="ing-category">
+        ${CATEGORY_ORDER.map(c => `<option value="${escapeAttr(c)}" ${c === entry.category ? "selected" : ""}>${escapeHtml(c)}</option>`).join("")}
+      </select>
+      <label class="staple-check"><input type="checkbox" class="ing-staple" ${entry.staple ? "checked" : ""}> Staple</label>
+      <input type="text" class="ing-aliases" value="${escapeAttr((entry.aliases || []).join(", "))}" placeholder="aliases">
+      <button class="icon-btn" data-action="delete-ing">✕</button>
+    </div>`).join("");
+
+  return `
+    <div id="ingRows">${rows || `<div class="empty-msg">Nothing yet -- add one below.</div>`}</div>
+    <div class="ingredient-row" style="border-top:2px solid var(--line); margin-top:10px; padding-top:12px;">
+      <input type="text" id="newIngName" placeholder="Name (e.g. Basmati rice)">
+      <select id="newIngCategory">
+        ${CATEGORY_ORDER.map(c => `<option value="${escapeAttr(c)}">${escapeHtml(c)}</option>`).join("")}
+      </select>
+      <label class="staple-check"><input type="checkbox" id="newIngStaple"> Staple</label>
+      <input type="text" id="newIngAliases" placeholder="aliases">
+      <button class="secondary-btn" id="addIngBtn">Add</button>
+    </div>
+  `;
+}
+
+function wireIngredientCatalogEvents() {
+  const main = document.getElementById("main");
+  main.querySelectorAll(".ingredient-row[data-id]").forEach(row => {
+    const id = row.dataset.id;
+    const save = async () => {
+      const catalog = await getIngredientCatalog();
+      const entry = catalog.find(e => e.id === id);
+      if (!entry) return;
+      entry.name = row.querySelector(".ing-name").value.trim() || entry.name;
+      entry.category = row.querySelector(".ing-category").value;
+      entry.staple = row.querySelector(".ing-staple").checked;
+      entry.aliases = row.querySelector(".ing-aliases").value.split(",").map(s => s.trim()).filter(Boolean);
+      await saveIngredientCatalog(catalog);
+    };
+    row.querySelector(".ing-name").addEventListener("blur", save);
+    row.querySelector(".ing-aliases").addEventListener("blur", save);
+    row.querySelector(".ing-category").addEventListener("change", save);
+    row.querySelector(".ing-staple").addEventListener("change", save);
+    row.querySelector('[data-action="delete-ing"]').addEventListener("click", async () => {
+      const catalog = await getIngredientCatalog();
+      const entry = catalog.find(e => e.id === id);
+      await saveIngredientCatalog(catalog.filter(e => e.id !== id));
+      showToast(`Deleted "${entry.name}".`, async () => {
+        const cur = await getIngredientCatalog();
+        cur.push(entry);
+        await saveIngredientCatalog(cur);
+      }, renderIngredientCatalog);
+      renderIngredientCatalog();
+    });
+  });
+  const addIngBtn = document.getElementById("addIngBtn");
+  if (addIngBtn) addIngBtn.addEventListener("click", async () => {
+    const name = document.getElementById("newIngName").value.trim();
+    if (!name) return;
+    const category = document.getElementById("newIngCategory").value;
+    const staple = document.getElementById("newIngStaple").checked;
+    const aliases = document.getElementById("newIngAliases").value.split(",").map(s => s.trim()).filter(Boolean);
+    if (aliases.length === 0) aliases.push(name.toLowerCase());
+    const catalog = await getIngredientCatalog();
+    catalog.push({ id: slugify(name) + "-" + Date.now().toString(36).slice(-4), name, category, staple, aliases });
+    await saveIngredientCatalog(catalog);
+    renderIngredientCatalog();
+  });
+}
+
+async function renderIngredientCatalog() {
+  const main = document.getElementById("main");
+  const catalog = await getIngredientCatalog();
+  main.innerHTML = `
+    <button class="back-btn" id="ingBackBtn">&larr; Back to shopping list</button>
+    <div class="detail-card">
+      <h2>Ingredients</h2>
+      ${renderIngredientCatalogSection(catalog)}
+    </div>
+  `;
+  document.getElementById("ingBackBtn").addEventListener("click", () => setTab("shop"));
+  wireIngredientCatalogEvents();
+}
+
 /* ---------- Add / edit a recipe ---------- */
 
 const SCHEMA_EXAMPLE = {
@@ -1024,12 +1175,11 @@ Notes:
 }
 
 async function copyClaudePrompt() {
-  const statusEl = document.getElementById("copyStatus");
   try {
     await navigator.clipboard.writeText(buildClaudePrompt());
-    statusEl.innerHTML = `<div class="status-msg status-ok">Copied! Paste it into a Claude chat along with your recipe link or photo.</div>`;
+    showToast("Copied! Paste into Claude with a link or photo.", null, null);
   } catch (e) {
-    statusEl.innerHTML = `<div class="status-msg status-err">Couldn't copy automatically -- select and copy the schema below instead.</div>`;
+    showToast("Couldn't copy automatically -- try again.", null, null);
   }
 }
 
@@ -1038,23 +1188,19 @@ function renderAdd(statusMsg) {
   main.innerHTML = `
     <button class="back-btn" id="addBackBtn">&larr; Back to recipes</button>
     <div class="settings-card">
-      <h3>Add a recipe manually</h3>
-      <p>Type it in yourself -- good for quick edits or recipes you already know by heart.</p>
+      <h3>Add manually</h3>
       <div class="btn-row"><button class="primary-btn" id="manualAddBtn" style="margin-top:0;">Add manually</button></div>
     </div>
     <div class="settings-card">
-      <h3>Add via Claude (paste JSON)</h3>
-      <p>Copy the prompt below into a normal Claude chat along with a link or photo of the recipe, then paste back whatever JSON it returns.</p>
+      <h3>Add via Claude</h3>
       <div class="btn-row"><button class="secondary-btn" id="copyPromptBtn">Copy prompt for Claude</button></div>
-      <div id="copyStatus"></div>
       <textarea id="jsonInput" placeholder="Paste recipe JSON here..." style="margin-top:12px;"></textarea>
       <button class="primary-btn" id="reviewJsonBtn">Review before adding</button>
       ${statusMsg ? statusMsg : ""}
     </div>
     <div class="schema-box">
-      <strong>Schema (included in the copied prompt):</strong>
       <pre>${escapeHtml(JSON.stringify(SCHEMA_EXAMPLE, null, 2))}</pre>
-      <div>Only <code>title</code> and <code>ingredients</code> are required — everything else is optional. If <code>id</code> is missing, one is generated from the title.</div>
+      <div>Only <code>title</code> and <code>ingredients</code> are required.</div>
     </div>
   `;
   document.getElementById("addBackBtn").addEventListener("click", renderRecipes);
@@ -1075,8 +1221,8 @@ function renderRecipeForm(recipe) {
       <h2>${isEdit ? "Edit recipe" : "Add a recipe"}</h2>
       <div class="form-field"><label>Title</label><input type="text" id="fTitle" value="${escapeAttr(r.title)}"></div>
       <div class="form-row-2">
-        <div class="form-field"><label>Source (book & page, or website name)</label><input type="text" id="fSource" value="${escapeAttr(r.source || "")}"></div>
-        <div class="form-field"><label>Source link (optional)</label><input type="url" id="fSourceUrl" value="${escapeAttr(r.sourceUrl || "")}"></div>
+        <div class="form-field"><label>Source</label><input type="text" id="fSource" value="${escapeAttr(r.source || "")}" placeholder="book & page, or website"></div>
+        <div class="form-field"><label>Source link</label><input type="url" id="fSourceUrl" value="${escapeAttr(r.sourceUrl || "")}" placeholder="optional"></div>
       </div>
       <div class="form-row-2">
         <div class="form-field"><label>Serves</label><input type="number" min="1" id="fServes" value="${defaultServes}"></div>
@@ -1110,13 +1256,19 @@ function renderRecipeForm(recipe) {
     let servesLabel = r.servesLabel || "";
     if (serves) servesLabel = /makes/i.test(servesLabel) ? `Makes ${serves} portions` : `Serves ${serves}`;
 
+    const previous = isEdit ? { ...r } : null;
     const savedRecipe = {
       id: isEdit ? r.id : slugify(title) + "-" + Date.now().toString(36).slice(-4),
       title, source, sourceUrl, tags, serves, servesLabel, time, ingredients, method, notes,
       dateAdded: r.dateAdded || new Date().toISOString().slice(0, 10)
     };
     await putRecipe(savedRecipe);
-    renderDetail(savedRecipe.id, isEdit ? "Recipe updated." : "Recipe added.");
+    if (isEdit) {
+      showToast("Recipe updated.", async () => { await putRecipe(previous); }, () => renderDetail(previous.id));
+    } else {
+      showToast("Recipe added.", async () => { await deleteRecipe(savedRecipe.id); }, renderRecipes);
+    }
+    renderDetail(savedRecipe.id);
   });
 }
 
@@ -1144,8 +1296,7 @@ function handleJsonReview() {
 function renderReview(skippedCount) {
   const main = document.getElementById("main");
   let html = `<div class="settings-card">
-    <h3>Confirm servings</h3>
-    <p>Check how many each recipe serves before adding it — adjust any that aren't right.</p>`;
+    <h3>Confirm servings</h3>`;
   pendingImport.forEach((entry, idx) => {
     html += `<div class="serves-review">
       <h4>${escapeHtml(entry.item.title)}</h4>
@@ -1201,103 +1352,31 @@ async function handleConfirmImport() {
   renderAdd(`<div class="status-msg status-ok">Added ${added} recipe(s).</div>`);
 }
 
-/* ---------- Settings: export / import, ingredient catalog ---------- */
+/* ---------- Settings: export / import ---------- */
 
-function renderIngredientCatalogSection(catalog) {
-  const rows = catalog.slice().sort((a, b) => a.name.localeCompare(b.name)).map(entry => `
-    <div class="ingredient-row" data-id="${escapeAttr(entry.id)}">
-      <input type="text" class="ing-name" value="${escapeAttr(entry.name)}">
-      <select class="ing-category">
-        ${CATEGORY_ORDER.map(c => `<option value="${escapeAttr(c)}" ${c === entry.category ? "selected" : ""}>${escapeHtml(c)}</option>`).join("")}
-      </select>
-      <label class="staple-check"><input type="checkbox" class="ing-staple" ${entry.staple ? "checked" : ""}> Staple</label>
-      <input type="text" class="ing-aliases" value="${escapeAttr((entry.aliases || []).join(", "))}" placeholder="aliases, comma separated">
-      <button class="icon-btn" data-action="delete-ing">✕</button>
-    </div>`).join("");
-
-  return `<div class="settings-card">
-    <h3>Ingredient list</h3>
-    <p>Canonical ingredients recipes get matched against -- so "rice sachet" and "packet of basmati rice" can become one shopping-list line, and mark anything as a staple you usually already have.</p>
-    <div id="ingRows">${rows || `<div class="empty-msg">No ingredients yet -- add one below.</div>`}</div>
-    <div class="ingredient-row" style="border-top:2px solid var(--line); margin-top:10px; padding-top:12px;">
-      <input type="text" id="newIngName" placeholder="Name (e.g. Basmati rice)">
-      <select id="newIngCategory">
-        ${CATEGORY_ORDER.map(c => `<option value="${escapeAttr(c)}">${escapeHtml(c)}</option>`).join("")}
-      </select>
-      <label class="staple-check"><input type="checkbox" id="newIngStaple"> Staple</label>
-      <input type="text" id="newIngAliases" placeholder="aliases, comma separated">
-      <button class="secondary-btn" id="addIngBtn">Add</button>
-    </div>
-  </div>`;
-}
-
-function wireIngredientCatalogEvents() {
+function renderSettings() {
   const main = document.getElementById("main");
-  main.querySelectorAll(".ingredient-row[data-id]").forEach(row => {
-    const id = row.dataset.id;
-    const save = async () => {
-      const catalog = await getIngredientCatalog();
-      const entry = catalog.find(e => e.id === id);
-      if (!entry) return;
-      entry.name = row.querySelector(".ing-name").value.trim() || entry.name;
-      entry.category = row.querySelector(".ing-category").value;
-      entry.staple = row.querySelector(".ing-staple").checked;
-      entry.aliases = row.querySelector(".ing-aliases").value.split(",").map(s => s.trim()).filter(Boolean);
-      await saveIngredientCatalog(catalog);
-    };
-    row.querySelector(".ing-name").addEventListener("blur", save);
-    row.querySelector(".ing-aliases").addEventListener("blur", save);
-    row.querySelector(".ing-category").addEventListener("change", save);
-    row.querySelector(".ing-staple").addEventListener("change", save);
-    row.querySelector('[data-action="delete-ing"]').addEventListener("click", async () => {
-      const catalog = await getIngredientCatalog();
-      await saveIngredientCatalog(catalog.filter(e => e.id !== id));
-      renderSettings();
-    });
-  });
-  const addIngBtn = document.getElementById("addIngBtn");
-  if (addIngBtn) addIngBtn.addEventListener("click", async () => {
-    const name = document.getElementById("newIngName").value.trim();
-    if (!name) return;
-    const category = document.getElementById("newIngCategory").value;
-    const staple = document.getElementById("newIngStaple").checked;
-    const aliases = document.getElementById("newIngAliases").value.split(",").map(s => s.trim()).filter(Boolean);
-    if (aliases.length === 0) aliases.push(name.toLowerCase());
-    const catalog = await getIngredientCatalog();
-    catalog.push({ id: slugify(name) + "-" + Date.now().toString(36).slice(-4), name, category, staple, aliases });
-    await saveIngredientCatalog(catalog);
-    renderSettings();
-  });
-}
-
-async function renderSettings() {
-  const main = document.getElementById("main");
-  const catalog = await getIngredientCatalog();
   main.innerHTML = `
     <div class="settings-card">
-      <h3>Export your library</h3>
-      <p>Download everything in your Rustle Up library as a single JSON file — useful for backups, or to share your library with your partner.</p>
+      <h3>Export library</h3>
       <div class="btn-row"><button class="secondary-btn" id="exportBtn">Export as JSON</button></div>
     </div>
     <div class="settings-card">
-      <h3>Import a library</h3>
-      <p>Import a previously exported JSON file. Recipes are matched by id — importing will update recipes that already exist and add any new ones, without duplicating.</p>
+      <h3>Import library</h3>
       <div class="btn-row">
         <button class="secondary-btn" id="importBtn">Choose file to import</button>
         <input type="file" id="fileInput" accept="application/json">
       </div>
       <div id="importStatus"></div>
     </div>
-    ${renderIngredientCatalogSection(catalog)}
     <div class="settings-card">
-      <h3>About this app</h3>
-      <p>Everything here lives in this browser's IndexedDB — nothing is sent anywhere, and there's no account or server involved. Clearing your browser data will clear your recipes too, so export regularly if you want a backup.</p>
+      <h3>About</h3>
+      <p>Stored locally in this browser only. Export regularly as a backup.</p>
     </div>
   `;
   document.getElementById("exportBtn").addEventListener("click", exportLibrary);
   document.getElementById("importBtn").addEventListener("click", () => document.getElementById("fileInput").click());
   document.getElementById("fileInput").addEventListener("change", handleFileImport);
-  wireIngredientCatalogEvents();
 }
 
 async function exportLibrary() {
@@ -1352,7 +1431,7 @@ function handleFileImport(e) {
         if (parsed.ingredientCatalog) await saveIngredientCatalog(parsed.ingredientCatalog);
       }
       document.getElementById("importStatus").innerHTML =
-        `<div class="status-msg status-ok">Imported ${count} recipe(s)${isBundle ? ", plus your meal plan, shopping list and ingredient catalog" : ""}.</div>`;
+        `<div class="status-msg status-ok">Imported ${count} recipe(s)${isBundle ? ", plus meal plan / shopping list / ingredients" : ""}.</div>`;
     } catch (err) {
       document.getElementById("importStatus").innerHTML = `<div class="status-msg status-err">Import failed: ${escapeHtml(err.message)}</div>`;
     }
@@ -1377,7 +1456,7 @@ function setTab(tab) {
   document.getElementById("tabSettingsBtn").classList.toggle("active", tab === "settings");
   if (tab === "recipes") renderRecipes();
   else if (tab === "mealplan") renderMealPlan();
-  else if (tab === "shop") { showCheckedItems = false; shopFlash = null; renderShoppingList(); }
+  else if (tab === "shop") { showCheckedItems = false; renderShoppingList(); }
   else if (tab === "settings") renderSettings();
 }
 
@@ -1385,6 +1464,13 @@ document.getElementById("tabRecipesBtn").addEventListener("click", () => setTab(
 document.getElementById("tabPlanBtn").addEventListener("click", () => setTab("mealplan"));
 document.getElementById("tabShopBtn").addEventListener("click", () => setTab("shop"));
 document.getElementById("tabSettingsBtn").addEventListener("click", () => setTab("settings"));
+document.getElementById("undoToastBtn").addEventListener("click", async () => {
+  const undoFn = toastUndoFn;
+  const refreshFn = toastRefreshFn;
+  hideToast();
+  if (undoFn) await undoFn();
+  if (refreshFn) refreshFn();
+});
 
 (async () => {
   db = await openDB();
