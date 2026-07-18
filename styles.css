@@ -176,6 +176,7 @@ textarea {
   font-size: 0.68rem; font-weight: 600; padding: 4px 7px; border-radius: 7px; white-space: nowrap;
 }
 .icon-btn.on { background: var(--staple); color: #fff; border-color: var(--staple); }
+.icon-btn:disabled { opacity: 0.3; }
 .staple-section .section-label {
   color: var(--staple); border-bottom-color: var(--staple);
 }

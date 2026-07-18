@@ -22,6 +22,7 @@ let db;
 let currentTab = "recipes";
 let currentSearch = "";
 let currentTagFilter = "";
+let currentShopSearch = "";
 let pendingImport = null; // recipes parsed but awaiting serves confirmation
 let showCheckedItems = false;
 
@@ -286,6 +287,20 @@ function matchCatalog(name, catalog) {
 
 function buildMergeKey(catalogEntry, name) {
   return catalogEntry ? "cat:" + catalogEntry.id : "text:" + name.toLowerCase().trim();
+}
+
+// New items land next to other items of the same rough type (background
+// "sort by type") without ever touching the position of existing items --
+// so any manual reordering you've done elsewhere in the list is preserved.
+function insertItemInCategoryOrder(items, newItem) {
+  const newRank = CATEGORY_ORDER.indexOf(newItem.category);
+  for (let i = items.length - 1; i >= 0; i--) {
+    if (CATEGORY_ORDER.indexOf(items[i].category) <= newRank) {
+      items.splice(i + 1, 0, newItem);
+      return;
+    }
+  }
+  items.unshift(newItem);
 }
 
 /* ---------- Seed data: the recipes already on hand ---------- */
@@ -771,7 +786,7 @@ async function addRecipeToMealPlan(recipe) {
         category, staple
       };
       item.text = formatItemText(item);
-      items.push(item);
+      insertItemInCategoryOrder(items, item);
       added++;
     }
   });
@@ -844,7 +859,7 @@ async function addManualItem() {
   const catalog = await getIngredientCatalog();
   const catalogEntry = matchCatalog(text, catalog);
   const items = await getShopItems();
-  items.push({
+  insertItemInCategoryOrder(items, {
     id: genId(), mergeKey: "manual:" + genId(), name: text, amount: null, unit: null,
     parenAmount: null, parenUnit: null, text,
     meals: [], manual: true, checked: false,
@@ -852,7 +867,37 @@ async function addManualItem() {
     staple: catalogEntry ? !!catalogEntry.staple : false
   });
   await saveShopItems(items);
-  renderShoppingList();
+  input.value = "";
+  renderShopListArea();
+}
+
+async function sortShopItemsByType() {
+  const items = await getShopItems();
+  const unchecked = items.filter(i => !i.checked);
+  const checked = items.filter(i => i.checked);
+  unchecked.sort((a, b) => {
+    if (a.staple !== b.staple) return a.staple ? 1 : -1;
+    const ra = CATEGORY_ORDER.indexOf(a.category), rb = CATEGORY_ORDER.indexOf(b.category);
+    if (ra !== rb) return ra - rb;
+    return a.name.localeCompare(b.name);
+  });
+  await saveShopItems(unchecked.concat(checked));
+}
+
+async function moveShopItem(id, direction, scope) {
+  const items = await getShopItems();
+  const scopeFilter = scope === "staple" ? (i => !i.checked && i.staple) : (i => !i.checked && !i.staple);
+  const scopeIds = items.filter(scopeFilter).map(i => i.id);
+  const pos = scopeIds.indexOf(id);
+  const swapPos = pos + direction;
+  if (pos === -1 || swapPos < 0 || swapPos >= scopeIds.length) return;
+  const idxA = items.findIndex(i => i.id === scopeIds[pos]);
+  const idxB = items.findIndex(i => i.id === scopeIds[swapPos]);
+  const tmp = items[idxA];
+  items[idxA] = items[idxB];
+  items[idxB] = tmp;
+  await saveShopItems(items);
+  renderShopListArea();
 }
 
 function buildShoppingListText(items) {
@@ -889,41 +934,71 @@ async function copyShoppingListText() {
   }
 }
 
+// Static chrome (add box, search box, manage-ingredients link) is rendered
+// once; renderShopListArea() re-renders just the item list below it, so
+// typing in the search box never rebuilds the input and loses focus.
 async function renderShoppingList() {
   const main = document.getElementById("main");
+  main.innerHTML = `
+    <div class="add-item-row">
+      <input type="text" id="newItemInput" placeholder="Add an item...">
+      <button class="primary-btn" id="addItemBtn" style="margin-top:0;">Add</button>
+    </div>
+    <div class="toolbar">
+      <input type="text" id="shopSearchInput" placeholder="Search your list..." value="${escapeAttr(currentShopSearch)}">
+    </div>
+    <div class="btn-row" style="margin-bottom:14px;">
+      <button class="secondary-btn" id="manageIngredientsBtn">Manage ingredients</button>
+    </div>
+    <div id="shopListArea"></div>
+  `;
+
+  document.getElementById("addItemBtn").addEventListener("click", addManualItem);
+  document.getElementById("newItemInput").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") addManualItem();
+  });
+  document.getElementById("manageIngredientsBtn").addEventListener("click", renderIngredientCatalog);
+  document.getElementById("shopSearchInput").addEventListener("input", (e) => {
+    currentShopSearch = e.target.value;
+    renderShopListArea();
+  });
+
+  renderShopListArea();
+}
+
+async function renderShopListArea() {
+  const listArea = document.getElementById("shopListArea");
+  if (!listArea) return;
   const items = await getShopItems();
-  const unchecked = items.filter(i => !i.checked);
-  const checked = items.filter(i => i.checked);
+  const term = currentShopSearch.trim().toLowerCase();
+  const matches = (i) => !term || i.text.toLowerCase().includes(term) || (i.meals || []).some(m => m.toLowerCase().includes(term));
+
+  const unchecked = items.filter(i => !i.checked && matches(i));
+  const checked = items.filter(i => i.checked && matches(i));
   const nonStaple = unchecked.filter(i => !i.staple);
   const staples = unchecked.filter(i => i.staple);
 
-  let html = `<div class="add-item-row">
-    <input type="text" id="newItemInput" placeholder="Add an item...">
-    <button class="primary-btn" id="addItemBtn" style="margin-top:0;">Add</button>
-  </div>
-  <div class="btn-row" style="margin-bottom:14px;">
-    <button class="secondary-btn" id="manageIngredientsBtn">Manage ingredients</button>
-  </div>`;
-
+  let html = "";
   if (items.length === 0) {
     html += `<div class="empty-msg">Empty. Add items above, or add a recipe from Meal Plan.</div>`;
+  } else if (term && nonStaple.length === 0 && staples.length === 0 && checked.length === 0) {
+    html += `<div class="empty-msg">No items match "${escapeHtml(currentShopSearch)}".</div>`;
   } else {
     if (nonStaple.length === 0 && staples.length === 0) {
       html += `<div class="empty-msg">Everything's checked off!${checked.length ? " Tap “Show checked” below." : ""}</div>`;
     }
-    CATEGORY_ORDER.forEach(cat => {
-      const group = nonStaple.filter(i => i.category === cat).sort((a, b) => a.name.localeCompare(b.name));
-      if (group.length === 0) return;
-      html += `<div class="section-label">${escapeHtml(cat)}</div><div>${group.map(i => renderShopItem(i)).join("")}</div>`;
-    });
+    if (nonStaple.length > 0) {
+      html += `<div>${nonStaple.map((item, idx) => renderShopItem(item, { scope: "main", isFirst: idx === 0, isLast: idx === nonStaple.length - 1 })).join("")}</div>`;
+    }
     if (staples.length > 0) {
       html += `<div class="staple-section">
         <div class="section-label">Staples</div>
-        <div>${staples.sort((a, b) => a.name.localeCompare(b.name)).map(i => renderShopItem(i, { hideBadge: true })).join("")}</div>
+        <div>${staples.map((item, idx) => renderShopItem(item, { hideBadge: true, scope: "staple", isFirst: idx === 0, isLast: idx === staples.length - 1 })).join("")}</div>
       </div>`;
     }
 
     html += `<div class="btn-row" style="margin-top:16px;">`;
+    html += `<button class="secondary-btn" id="sortByTypeBtn">Sort by type</button>`;
     html += `<button class="secondary-btn" id="copyTextBtn">Copy as text</button>`;
     if (checked.length > 0) {
       html += `<button class="secondary-btn" id="toggleCheckedBtn">${showCheckedItems ? "Hide" : "Show"} checked (${checked.length})</button>`;
@@ -935,16 +1010,11 @@ async function renderShoppingList() {
     }
   }
 
-  main.innerHTML = html;
+  listArea.innerHTML = html;
 
-  document.getElementById("addItemBtn").addEventListener("click", addManualItem);
-  document.getElementById("newItemInput").addEventListener("keydown", (e) => {
-    if (e.key === "Enter") addManualItem();
-  });
-  document.getElementById("manageIngredientsBtn").addEventListener("click", renderIngredientCatalog);
-
-  main.querySelectorAll(".shop-item").forEach(el => {
+  listArea.querySelectorAll(".shop-item").forEach(el => {
     const id = el.dataset.id;
+    const scope = el.dataset.scope;
     el.querySelector(".box").addEventListener("click", async (e) => {
       e.stopPropagation();
       const all = await getShopItems();
@@ -958,9 +1028,9 @@ async function renderShoppingList() {
           const it2 = all2.find(i => i.id === id);
           if (it2) it2.checked = false;
           await saveShopItems(all2);
-        }, renderShoppingList);
+        }, renderShopListArea);
       }
-      renderShoppingList();
+      renderShopListArea();
     });
     const textEl = el.querySelector(".item-text");
     if (textEl) {
@@ -969,6 +1039,16 @@ async function renderShoppingList() {
         startEditItem(el, id);
       });
     }
+    const upBtn = el.querySelector('[data-action="move-up"]');
+    if (upBtn) upBtn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      await moveShopItem(id, -1, scope);
+    });
+    const downBtn = el.querySelector('[data-action="move-down"]');
+    if (downBtn) downBtn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      await moveShopItem(id, 1, scope);
+    });
     const delBtn = el.querySelector('[data-action="delete-item"]');
     if (delBtn) {
       delBtn.addEventListener("click", async (e) => {
@@ -980,18 +1060,25 @@ async function renderShoppingList() {
           const cur = await getShopItems();
           cur.push(item);
           await saveShopItems(cur);
-        }, renderShoppingList);
-        renderShoppingList();
+        }, renderShopListArea);
+        renderShopListArea();
       });
     }
   });
 
+  const sortByTypeBtn = document.getElementById("sortByTypeBtn");
+  if (sortByTypeBtn) sortByTypeBtn.addEventListener("click", async () => {
+    const before = await getShopItems();
+    await sortShopItemsByType();
+    showToast("Sorted by type.", async () => { await saveShopItems(before); }, renderShopListArea);
+    renderShopListArea();
+  });
   const copyTextBtn = document.getElementById("copyTextBtn");
   if (copyTextBtn) copyTextBtn.addEventListener("click", copyShoppingListText);
   const toggleCheckedBtn = document.getElementById("toggleCheckedBtn");
   if (toggleCheckedBtn) toggleCheckedBtn.addEventListener("click", () => {
     showCheckedItems = !showCheckedItems;
-    renderShoppingList();
+    renderShopListArea();
   });
   const clearCheckedBtn = document.getElementById("clearCheckedBtn");
   if (clearCheckedBtn) clearCheckedBtn.addEventListener("click", async () => {
@@ -1002,23 +1089,23 @@ async function renderShoppingList() {
     showToast(`Cleared ${removed.length} checked item(s).`, async () => {
       const cur = await getShopItems();
       await saveShopItems(cur.concat(removed));
-    }, renderShoppingList);
-    renderShoppingList();
+    }, renderShopListArea);
+    renderShopListArea();
   });
   const clearAllBtn = document.getElementById("clearAllBtn");
   if (clearAllBtn) clearAllBtn.addEventListener("click", async () => {
     const all = await getShopItems();
     if (all.length === 0) return;
     await saveShopItems([]);
-    showToast(`Cleared the whole list (${all.length} item(s)).`, async () => { await saveShopItems(all); }, renderShoppingList);
-    renderShoppingList();
+    showToast(`Cleared the whole list (${all.length} item(s)).`, async () => { await saveShopItems(all); }, renderShopListArea);
+    renderShopListArea();
   });
 }
 
 function renderShopItem(item, opts) {
   opts = opts || {};
   const mealsLabel = (item.meals && item.meals.length) ? item.meals.join(", ") : "";
-  return `<div class="shop-item ${item.checked ? "checked" : ""}" data-id="${escapeAttr(item.id)}">
+  return `<div class="shop-item ${item.checked ? "checked" : ""}" data-id="${escapeAttr(item.id)}" data-scope="${escapeAttr(opts.scope || "")}">
     <div class="box"><svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg></div>
     <div class="item-body">
       <div class="item-text">${escapeHtml(item.text)}</div>
@@ -1026,6 +1113,8 @@ function renderShopItem(item, opts) {
     </div>
     <div class="item-controls">
       ${item.staple && !opts.hideBadge ? `<span class="icon-btn on" style="pointer-events:none;">Staple</span>` : ""}
+      ${opts.scope ? `<button class="icon-btn" data-action="move-up" ${opts.isFirst ? "disabled" : ""} title="Move up">↑</button>
+      <button class="icon-btn" data-action="move-down" ${opts.isLast ? "disabled" : ""} title="Move down">↓</button>` : ""}
       <button class="icon-btn" data-action="delete-item" title="Remove item">✕</button>
     </div>
   </div>`;
@@ -1044,7 +1133,7 @@ function startEditItem(el, id) {
     const item = all.find(i => i.id === id);
     if (item && val) { item.text = val; item.manual = true; }
     await saveShopItems(all);
-    renderShoppingList();
+    renderShopListArea();
   };
   input.addEventListener("blur", save);
   input.addEventListener("keydown", (e) => { if (e.key === "Enter") input.blur(); });
