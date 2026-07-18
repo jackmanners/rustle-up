@@ -207,6 +207,22 @@ input[type="file"] { display: none; }
 }
 .staple-check { font-size:0.78rem; display:flex; align-items:center; gap:4px; white-space: nowrap; }
 
+/* Collapsible notes card (Meal Plan / Shopping List) */
+.notes-card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; margin-bottom: 14px; overflow: hidden; }
+.notes-toggle {
+  display:flex; align-items:center; gap:8px; width:100%; text-align:left;
+  background:none; border:none; padding:10px 14px; font-size:0.85rem; font-weight:600;
+  color:var(--ink); cursor:pointer;
+}
+.notes-toggle .chevron { color: var(--muted); font-size:0.7rem; display:inline-block; transition: transform 0.15s; }
+.notes-toggle.open .chevron { transform: rotate(90deg); }
+.notes-preview { font-weight:400; color: var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.notes-body { padding: 0 14px 14px; }
+.notes-body textarea {
+  width:100%; min-height:70px; border:1px solid var(--line); border-radius:8px; padding:8px 10px;
+  font-family:inherit; font-size:0.85rem; background:var(--cream); color:var(--ink); resize:vertical;
+}
+
 /* Recipe scaling */
 .scale-row { display:flex; align-items:center; gap:8px; font-size: 0.85rem; margin: 10px 0; }
 .scale-row input[type="number"] {

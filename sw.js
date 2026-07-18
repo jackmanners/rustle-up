@@ -1,4 +1,4 @@
-const CACHE_NAME = "rustle-up-v2";
+const CACHE_NAME = "rustle-up-v3";
 const ASSETS = [
   "./",
   "./index.html",

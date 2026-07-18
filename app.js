@@ -25,6 +25,8 @@ let currentTagFilter = "";
 let currentShopSearch = "";
 let pendingImport = null; // recipes parsed but awaiting serves confirmation
 let showCheckedItems = false;
+let mealPlanNotesOpen = false;
+let shopNotesOpen = false;
 
 const CATEGORY_ORDER = ["Produce", "Meat & Fish", "Dairy & Eggs", "Bakery", "Pantry", "Frozen", "Drinks", "Other"];
 
@@ -150,6 +152,25 @@ async function saveIngredientCatalog(cat) { await setMeta("ingredientCatalog", c
 async function seedCatalogIfEmpty() {
   const existing = await getIngredientCatalog();
   if (existing.length === 0) await saveIngredientCatalog(DEFAULT_INGREDIENT_CATALOG.map(e => ({ ...e })));
+}
+
+async function getMealPlanNotes() { return (await getMeta("mealPlanNotes")) || ""; }
+async function saveMealPlanNotesText(text) { await setMeta("mealPlanNotes", text); }
+async function getShopNotes() { return (await getMeta("shopNotes")) || ""; }
+async function saveShopNotesText(text) { await setMeta("shopNotes", text); }
+
+// Shared collapsible notes card used by both the Meal Plan and Shopping
+// List tabs. Rendered into its own container so toggling/saving never
+// re-renders (and loses focus on) anything else on the page.
+function renderNotesCard(id, notes, isOpen, placeholder) {
+  const preview = notes.trim() ? notes.trim().split("\n")[0] : "";
+  return `<div class="notes-card">
+    <button class="notes-toggle ${isOpen ? "open" : ""}" id="${id}Toggle">
+      <span class="chevron">▸</span><span>Notes</span>
+      ${!isOpen && preview ? `<span class="notes-preview">– ${escapeHtml(preview)}</span>` : ""}
+    </button>
+    ${isOpen ? `<div class="notes-body"><textarea id="${id}Text" placeholder="${escapeAttr(placeholder)}">${escapeHtml(notes)}</textarea></div>` : ""}
+  </div>`;
 }
 
 /* ---------- Ingredient quantity parsing, merging & scaling ----------
@@ -645,10 +666,12 @@ function renderRecipeList(recipes, planIds) {
       if (!r) return;
       const planIdsNow = await getMealPlan();
       if (planIdsNow.includes(r.id)) {
+        const shopItemsBefore = await getShopItems();
+        const planBefore = await getMealPlan();
         await removeRecipeFromMealPlan(r.id);
-        showToast(`Removed "${r.title}" from meal plan.`, async () => {
-          const plan = await getMealPlan();
-          if (!plan.includes(r.id)) { plan.push(r.id); await saveMealPlan(plan); }
+        showToast(`Removed "${r.title}" from meal plan and its ingredients from the list.`, async () => {
+          await saveMealPlan(planBefore);
+          await saveShopItems(shopItemsBefore);
         }, renderRecipes);
       } else {
         const result = await addRecipeToMealPlan(r);
@@ -725,10 +748,12 @@ async function renderDetail(id) {
   document.getElementById("backBtn").addEventListener("click", renderRecipes);
   document.getElementById("planToggleBtn").addEventListener("click", async () => {
     if (inPlan) {
+      const shopItemsBefore = await getShopItems();
+      const planBefore = await getMealPlan();
       await removeRecipeFromMealPlan(r.id);
-      showToast("Removed from meal plan.", async () => {
-        const plan = await getMealPlan();
-        if (!plan.includes(r.id)) { plan.push(r.id); await saveMealPlan(plan); }
+      showToast("Removed from meal plan and its ingredients from the list.", async () => {
+        await saveMealPlan(planBefore);
+        await saveShopItems(shopItemsBefore);
       }, () => renderDetail(r.id));
     } else {
       const result = await addRecipeToMealPlan(r);
@@ -751,6 +776,19 @@ async function renderDetail(id) {
 
 /* ---------- Meal plan ---------- */
 
+// Auto-generated (non-manual) shopping items track a `contributions` array
+// -- one entry per recipe that fed into that merged line -- so removing a
+// recipe from the meal plan can precisely subtract just its share (or drop
+// the line entirely if it was the only contributor) instead of guessing.
+function recomputeItemFromContributions(item) {
+  const amounts = item.contributions.map(c => c.amount).filter(a => a != null);
+  item.amount = amounts.length > 0 ? amounts.reduce((a, b) => a + b, 0) : null;
+  const parenAmounts = item.contributions.map(c => c.parenAmount).filter(a => a != null);
+  item.parenAmount = parenAmounts.length > 0 ? parenAmounts.reduce((a, b) => a + b, 0) : null;
+  item.meals = item.contributions.map(c => c.recipeTitle);
+  item.text = formatItemText(item);
+}
+
 async function addRecipeToMealPlan(recipe) {
   const plan = await getMealPlan();
   if (!plan.includes(recipe.id)) {
@@ -768,24 +806,33 @@ async function addRecipeToMealPlan(recipe) {
     const mergeKey = buildMergeKey(catalogEntry, parsed.name);
     const category = catalogEntry ? catalogEntry.category : "Other";
     const staple = catalogEntry ? !!catalogEntry.staple : false;
+    const contribution = { recipeId: recipe.id, recipeTitle: recipe.title, amount: parsed.amount, parenAmount: parsed.parenAmount };
 
     const existing = items.find(i => !i.manual && i.mergeKey === mergeKey && i.unit === parsed.unit);
     if (existing) {
-      if (parsed.amount != null) existing.amount = (existing.amount || 0) + parsed.amount;
-      if (parsed.parenAmount != null) existing.parenAmount = (existing.parenAmount || 0) + parsed.parenAmount;
-      if (!existing.meals.includes(recipe.title)) existing.meals.push(recipe.title);
       existing.name = displayName;
-      existing.text = formatItemText(existing);
+      if (existing.contributions) {
+        existing.contributions.push(contribution);
+        existing.parenUnit = parsed.parenUnit;
+        recomputeItemFromContributions(existing);
+      } else {
+        // Pre-existing line from before per-recipe tracking was added --
+        // fall back to a plain additive merge (won't be precisely
+        // removable later, but won't lose data either).
+        if (parsed.amount != null) existing.amount = (existing.amount || 0) + parsed.amount;
+        if (parsed.parenAmount != null) existing.parenAmount = (existing.parenAmount || 0) + parsed.parenAmount;
+        if (!existing.meals.includes(recipe.title)) existing.meals.push(recipe.title);
+        existing.text = formatItemText(existing);
+      }
       merged++;
     } else {
       const item = {
         id: genId(), mergeKey, name: displayName,
-        amount: parsed.amount, unit: parsed.unit,
-        parenAmount: parsed.parenAmount, parenUnit: parsed.parenUnit,
-        text: "", meals: [recipe.title], manual: false, checked: false,
-        category, staple
+        unit: parsed.unit, parenUnit: parsed.parenUnit,
+        manual: false, checked: false, category, staple,
+        contributions: [contribution]
       };
-      item.text = formatItemText(item);
+      recomputeItemFromContributions(item);
       insertItemInCategoryOrder(items, item);
       added++;
     }
@@ -798,6 +845,31 @@ async function addRecipeToMealPlan(recipe) {
 async function removeRecipeFromMealPlan(recipeId) {
   const plan = await getMealPlan();
   await saveMealPlan(plan.filter(id => id !== recipeId));
+
+  const items = await getShopItems();
+  const kept = items.filter(item => {
+    if (item.manual || !item.contributions) return true;
+    const remaining = item.contributions.filter(c => c.recipeId !== recipeId);
+    if (remaining.length === item.contributions.length) return true; // wasn't a contributor
+    if (remaining.length === 0) return false; // drop the line entirely
+    item.contributions = remaining;
+    recomputeItemFromContributions(item);
+    return true;
+  });
+  await saveShopItems(kept);
+}
+
+async function renderMealPlanNotesCard() {
+  const container = document.getElementById("mealNotesCard");
+  if (!container) return;
+  const notes = await getMealPlanNotes();
+  container.innerHTML = renderNotesCard("mealNotes", notes, mealPlanNotesOpen, "Notes for this meal plan...");
+  document.getElementById("mealNotesToggle").addEventListener("click", () => {
+    mealPlanNotesOpen = !mealPlanNotesOpen;
+    renderMealPlanNotesCard();
+  });
+  const textarea = document.getElementById("mealNotesText");
+  if (textarea) textarea.addEventListener("blur", async () => { await saveMealPlanNotesText(textarea.value); });
 }
 
 async function renderMealPlan() {
@@ -807,7 +879,7 @@ async function renderMealPlan() {
   const planned = planIds.map(id => recipes.find(r => r.id === id)).filter(Boolean);
   planned.sort((a, b) => a.title.localeCompare(b.title));
 
-  let html = `<p class="intro-note">Recipes you're cooking this period.</p>`;
+  let html = `<div id="mealNotesCard"></div><p class="intro-note">Recipes you're cooking this period.</p>`;
 
   if (planned.length === 0) {
     html += `<div class="empty-msg">Nothing planned yet -- add a recipe from the Recipes tab.</div>`;
@@ -827,6 +899,7 @@ async function renderMealPlan() {
   }
 
   main.innerHTML = html;
+  await renderMealPlanNotesCard();
   main.querySelectorAll(".recipe-card").forEach(card => {
     card.addEventListener("click", (e) => {
       if (e.target.closest("button")) return;
@@ -838,10 +911,12 @@ async function renderMealPlan() {
       e.stopPropagation();
       const id = btn.dataset.id;
       const r = recipes.find(x => x.id === id);
+      const shopItemsBefore = await getShopItems();
+      const planBefore = await getMealPlan();
       await removeRecipeFromMealPlan(id);
-      showToast(`Removed "${r ? r.title : "recipe"}" from plan.`, async () => {
-        const plan = await getMealPlan();
-        if (!plan.includes(id)) { plan.push(id); await saveMealPlan(plan); }
+      showToast(`Removed "${r ? r.title : "recipe"}" and its ingredients from the list.`, async () => {
+        await saveMealPlan(planBefore);
+        await saveShopItems(shopItemsBefore);
       }, renderMealPlan);
       renderMealPlan();
     });
@@ -937,9 +1012,23 @@ async function copyShoppingListText() {
 // Static chrome (add box, search box, manage-ingredients link) is rendered
 // once; renderShopListArea() re-renders just the item list below it, so
 // typing in the search box never rebuilds the input and loses focus.
+async function renderShopNotesCard() {
+  const container = document.getElementById("shopNotesCard");
+  if (!container) return;
+  const notes = await getShopNotes();
+  container.innerHTML = renderNotesCard("shopNotes", notes, shopNotesOpen, "Notes for this shopping trip...");
+  document.getElementById("shopNotesToggle").addEventListener("click", () => {
+    shopNotesOpen = !shopNotesOpen;
+    renderShopNotesCard();
+  });
+  const textarea = document.getElementById("shopNotesText");
+  if (textarea) textarea.addEventListener("blur", async () => { await saveShopNotesText(textarea.value); });
+}
+
 async function renderShoppingList() {
   const main = document.getElementById("main");
   main.innerHTML = `
+    <div id="shopNotesCard"></div>
     <div class="add-item-row">
       <input type="text" id="newItemInput" placeholder="Add an item...">
       <button class="primary-btn" id="addItemBtn" style="margin-top:0;">Add</button>
@@ -953,6 +1042,7 @@ async function renderShoppingList() {
     <div id="shopListArea"></div>
   `;
 
+  await renderShopNotesCard();
   document.getElementById("addItemBtn").addEventListener("click", addManualItem);
   document.getElementById("newItemInput").addEventListener("keydown", (e) => {
     if (e.key === "Enter") addManualItem();
