@@ -177,6 +177,15 @@ textarea {
 }
 .icon-btn.on { background: var(--staple); color: #fff; border-color: var(--staple); }
 .icon-btn:disabled { opacity: 0.3; }
+.drag-handle {
+  cursor: grab; touch-action: none; color: var(--muted); padding: 4px 6px;
+  font-size: 0.95rem; user-select: none; flex-shrink: 0; line-height: 1;
+}
+.drag-handle:active { cursor: grabbing; }
+.shop-item.dragging { position: relative; z-index: 5; background: var(--card); box-shadow: 0 6px 16px rgba(0,0,0,0.18); border-radius: 8px; }
+.shop-item.selected { background: var(--leaf-bg); border-radius: 8px; }
+.select-box.checked { background: var(--leaf); border-color: var(--leaf); }
+.select-box.checked svg { opacity: 1; }
 .staple-section .section-label {
   color: var(--staple); border-bottom-color: var(--staple);
 }
@@ -195,6 +204,7 @@ textarea {
   background: var(--cream); color: var(--leaf-dark); border: 1px solid var(--leaf);
   padding: 9px 14px; border-radius: 8px; font-size: 0.85rem; font-weight: 600;
 }
+.secondary-btn:disabled { opacity: 0.4; }
 input[type="file"] { display: none; }
 .ingredient-row { display:flex; gap:8px; align-items:center; padding: 8px 0; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
 .ingredient-row:last-child { border-bottom: none; }

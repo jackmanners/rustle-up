@@ -25,6 +25,8 @@ let currentTagFilter = "";
 let currentShopSearch = "";
 let pendingImport = null; // recipes parsed but awaiting serves confirmation
 let showCheckedItems = false;
+let shopSelectMode = false;
+let selectedShopIds = new Set();
 let mealPlanNotesOpen = false;
 let shopNotesOpen = false;
 
@@ -959,20 +961,113 @@ async function sortShopItemsByType() {
   await saveShopItems(unchecked.concat(checked));
 }
 
-async function moveShopItem(id, direction, scope) {
+function shopScopeFilter(scope) {
+  return scope === "staple" ? (i => !i.checked && i.staple) : (i => !i.checked && !i.staple);
+}
+
+// Writes a new id order for one scope (main or staple) back into the full
+// items array, leaving every other item's position untouched.
+async function applyScopeOrder(scope, newOrderIds) {
   const items = await getShopItems();
-  const scopeFilter = scope === "staple" ? (i => !i.checked && i.staple) : (i => !i.checked && !i.staple);
-  const scopeIds = items.filter(scopeFilter).map(i => i.id);
-  const pos = scopeIds.indexOf(id);
-  const swapPos = pos + direction;
-  if (pos === -1 || swapPos < 0 || swapPos >= scopeIds.length) return;
-  const idxA = items.findIndex(i => i.id === scopeIds[pos]);
-  const idxB = items.findIndex(i => i.id === scopeIds[swapPos]);
-  const tmp = items[idxA];
-  items[idxA] = items[idxB];
-  items[idxB] = tmp;
+  const scopeItems = items.filter(shopScopeFilter(scope));
+  const byId = new Map(scopeItems.map(i => [i.id, i]));
+  const positions = [];
+  items.forEach((it, idx) => { if (byId.has(it.id)) positions.push(idx); });
+  newOrderIds.forEach((id, i) => { items[positions[i]] = byId.get(id); });
   await saveShopItems(items);
+  return items;
+}
+
+// Moves the block of selected ids (within one scope's id order) one slot
+// up or down as a group, keeping their relative order. Works whether the
+// selection is contiguous or scattered -- after the first move it's
+// contiguous, same as most list apps.
+function moveSelectedBlock(scopeIds, selectedSet, direction) {
+  const selected = scopeIds.filter(id => selectedSet.has(id));
+  const others = scopeIds.filter(id => !selectedSet.has(id));
+  if (selected.length === 0) return scopeIds;
+  const firstSelIdx = scopeIds.findIndex(id => selectedSet.has(id));
+  const lastSelIdx = scopeIds.length - 1 - [...scopeIds].reverse().findIndex(id => selectedSet.has(id));
+
+  if (direction < 0) {
+    // Consolidate at the TOP of the selection's span (pushing anything
+    // between scattered picks downward), then step one more slot up.
+    if (firstSelIdx === 0) return scopeIds;
+    const othersBeforeFirst = scopeIds.slice(0, firstSelIdx).filter(id => !selectedSet.has(id)).length;
+    return spliceBlock(others, selected, othersBeforeFirst - 1);
+  }
+  // Consolidate at the BOTTOM of the selection's span (pushing anything
+  // between scattered picks upward), then step one more slot down.
+  if (lastSelIdx === scopeIds.length - 1) return scopeIds;
+  const othersUpToLast = scopeIds.slice(0, lastSelIdx + 1).filter(id => !selectedSet.has(id)).length;
+  return spliceBlock(others, selected, othersUpToLast + 1);
+}
+
+function spliceBlock(others, block, beforeCount) {
+  const result = others.slice(0, beforeCount);
+  result.push(...block);
+  result.push(...others.slice(beforeCount));
+  return result;
+}
+
+async function moveSelectedItems(direction) {
+  for (const scope of ["main", "staple"]) {
+    const items = await getShopItems();
+    const scopeIds = items.filter(shopScopeFilter(scope)).map(i => i.id);
+    const selInScope = new Set(scopeIds.filter(id => selectedShopIds.has(id)));
+    if (selInScope.size === 0) continue;
+    const newOrder = moveSelectedBlock(scopeIds, selInScope, direction);
+    await applyScopeOrder(scope, newOrder);
+  }
   renderShopListArea();
+}
+
+/* ---------- Drag to reorder (pointer events -- works with touch too) ---------- */
+
+let shopDrag = null; // { el, scope }
+
+function wireDragHandle(handle, itemEl, scope) {
+  handle.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    try { handle.setPointerCapture(e.pointerId); } catch (err) { /* best-effort */ }
+    shopDrag = { el: itemEl, scope, lastY: e.clientY };
+    itemEl.classList.add("dragging");
+  });
+  handle.addEventListener("pointermove", (e) => {
+    if (!shopDrag || shopDrag.el !== itemEl) return;
+    itemEl.style.transform = `translateY(${e.clientY - shopDrag.lastY}px)`;
+    const siblings = [...itemEl.parentElement.querySelectorAll(`.shop-item[data-scope="${scope}"]`)];
+    const idx = siblings.indexOf(itemEl);
+    for (const sib of siblings) {
+      if (sib === itemEl) continue;
+      const rect = sib.getBoundingClientRect();
+      const mid = rect.top + rect.height / 2;
+      const sibIdx = siblings.indexOf(sib);
+      if (e.clientY < mid && sibIdx < idx) {
+        itemEl.parentElement.insertBefore(itemEl, sib);
+        shopDrag.lastY = e.clientY;
+        itemEl.style.transform = "translateY(0px)";
+        break;
+      } else if (e.clientY > mid && sibIdx > idx) {
+        itemEl.parentElement.insertBefore(itemEl, sib.nextSibling);
+        shopDrag.lastY = e.clientY;
+        itemEl.style.transform = "translateY(0px)";
+        break;
+      }
+    }
+  });
+  const endDrag = async () => {
+    if (!shopDrag || shopDrag.el !== itemEl) return;
+    itemEl.classList.remove("dragging");
+    itemEl.style.transform = "";
+    const scopeNow = shopDrag.scope;
+    shopDrag = null;
+    const domIds = [...itemEl.parentElement.querySelectorAll(`.shop-item[data-scope="${scopeNow}"]`)].map(el => el.dataset.id);
+    await applyScopeOrder(scopeNow, domIds);
+  };
+  handle.addEventListener("pointerup", endDrag);
+  handle.addEventListener("pointercancel", endDrag);
 }
 
 function buildShoppingListText(items) {
@@ -1078,24 +1173,33 @@ async function renderShopListArea() {
       html += `<div class="empty-msg">Everything's checked off!${checked.length ? " Tap “Show checked” below." : ""}</div>`;
     }
     if (nonStaple.length > 0) {
-      html += `<div>${nonStaple.map((item, idx) => renderShopItem(item, { scope: "main", isFirst: idx === 0, isLast: idx === nonStaple.length - 1 })).join("")}</div>`;
+      html += `<div>${nonStaple.map(item => renderShopItem(item, { scope: "main" })).join("")}</div>`;
     }
     if (staples.length > 0) {
       html += `<div class="staple-section">
         <div class="section-label">Staples</div>
-        <div>${staples.map((item, idx) => renderShopItem(item, { hideBadge: true, scope: "staple", isFirst: idx === 0, isLast: idx === staples.length - 1 })).join("")}</div>
+        <div>${staples.map(item => renderShopItem(item, { hideBadge: true, scope: "staple" })).join("")}</div>
       </div>`;
     }
 
     html += `<div class="btn-row" style="margin-top:16px;">`;
-    html += `<button class="secondary-btn" id="sortByTypeBtn">Sort by type</button>`;
-    html += `<button class="secondary-btn" id="copyTextBtn">Copy as text</button>`;
-    if (checked.length > 0) {
-      html += `<button class="secondary-btn" id="toggleCheckedBtn">${showCheckedItems ? "Hide" : "Show"} checked (${checked.length})</button>`;
+    if (shopSelectMode) {
+      const n = selectedShopIds.size;
+      html += `<button class="secondary-btn" id="moveUpBtn" ${n === 0 ? "disabled" : ""}>Move up${n ? ` (${n})` : ""}</button>`;
+      html += `<button class="secondary-btn" id="moveDownBtn" ${n === 0 ? "disabled" : ""}>Move down${n ? ` (${n})` : ""}</button>`;
+      html += `<button class="secondary-btn" id="doneSelectBtn">Done</button>`;
+    } else {
+      html += `<button class="secondary-btn" id="selectModeBtn">Select</button>`;
+      html += `<button class="secondary-btn" id="sortByTypeBtn">Sort by type</button>`;
+      html += `<button class="secondary-btn" id="copyTextBtn">Copy as text</button>`;
+      if (checked.length > 0) {
+        html += `<button class="secondary-btn" id="toggleCheckedBtn">${showCheckedItems ? "Hide" : "Show"} checked (${checked.length})</button>`;
+      }
+      html += `<button class="secondary-btn" id="clearCheckedBtn">Clear checked</button><button class="secondary-btn" id="clearAllBtn">Clear all</button>`;
     }
-    html += `<button class="secondary-btn" id="clearCheckedBtn">Clear checked</button><button class="secondary-btn" id="clearAllBtn">Clear all</button></div>`;
+    html += `</div>`;
 
-    if (showCheckedItems && checked.length > 0) {
+    if (!shopSelectMode && showCheckedItems && checked.length > 0) {
       html += `<div class="section-label">Checked off</div><div>${checked.sort((a, b) => a.name.localeCompare(b.name)).map(i => renderShopItem(i)).join("")}</div>`;
     }
   }
@@ -1105,6 +1209,17 @@ async function renderShopListArea() {
   listArea.querySelectorAll(".shop-item").forEach(el => {
     const id = el.dataset.id;
     const scope = el.dataset.scope;
+
+    if (shopSelectMode) {
+      if (scope) {
+        el.addEventListener("click", () => {
+          if (selectedShopIds.has(id)) selectedShopIds.delete(id); else selectedShopIds.add(id);
+          renderShopListArea();
+        });
+      }
+      return;
+    }
+
     el.querySelector(".box").addEventListener("click", async (e) => {
       e.stopPropagation();
       const all = await getShopItems();
@@ -1129,16 +1244,8 @@ async function renderShopListArea() {
         startEditItem(el, id);
       });
     }
-    const upBtn = el.querySelector('[data-action="move-up"]');
-    if (upBtn) upBtn.addEventListener("click", async (e) => {
-      e.stopPropagation();
-      await moveShopItem(id, -1, scope);
-    });
-    const downBtn = el.querySelector('[data-action="move-down"]');
-    if (downBtn) downBtn.addEventListener("click", async (e) => {
-      e.stopPropagation();
-      await moveShopItem(id, 1, scope);
-    });
+    const handle = el.querySelector('[data-action="drag-handle"]');
+    if (handle) wireDragHandle(handle, el, scope);
     const delBtn = el.querySelector('[data-action="delete-item"]');
     if (delBtn) {
       delBtn.addEventListener("click", async (e) => {
@@ -1155,6 +1262,23 @@ async function renderShopListArea() {
       });
     }
   });
+
+  const selectModeBtn = document.getElementById("selectModeBtn");
+  if (selectModeBtn) selectModeBtn.addEventListener("click", () => {
+    shopSelectMode = true;
+    selectedShopIds = new Set();
+    renderShopListArea();
+  });
+  const doneSelectBtn = document.getElementById("doneSelectBtn");
+  if (doneSelectBtn) doneSelectBtn.addEventListener("click", () => {
+    shopSelectMode = false;
+    selectedShopIds = new Set();
+    renderShopListArea();
+  });
+  const moveUpBtn = document.getElementById("moveUpBtn");
+  if (moveUpBtn) moveUpBtn.addEventListener("click", () => moveSelectedItems(-1));
+  const moveDownBtn = document.getElementById("moveDownBtn");
+  if (moveDownBtn) moveDownBtn.addEventListener("click", () => moveSelectedItems(1));
 
   const sortByTypeBtn = document.getElementById("sortByTypeBtn");
   if (sortByTypeBtn) sortByTypeBtn.addEventListener("click", async () => {
@@ -1195,17 +1319,20 @@ async function renderShopListArea() {
 function renderShopItem(item, opts) {
   opts = opts || {};
   const mealsLabel = (item.meals && item.meals.length) ? item.meals.join(", ") : "";
-  return `<div class="shop-item ${item.checked ? "checked" : ""}" data-id="${escapeAttr(item.id)}" data-scope="${escapeAttr(opts.scope || "")}">
-    <div class="box"><svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg></div>
+  const selected = shopSelectMode && selectedShopIds.has(item.id);
+  const leadBox = shopSelectMode
+    ? `<div class="box select-box ${selected ? "checked" : ""}"><svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg></div>`
+    : `<div class="box"><svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg></div>`;
+  return `<div class="shop-item ${item.checked ? "checked" : ""} ${selected ? "selected" : ""}" data-id="${escapeAttr(item.id)}" data-scope="${escapeAttr(opts.scope || "")}">
+    ${leadBox}
+    ${opts.scope && !shopSelectMode ? `<div class="drag-handle" data-action="drag-handle" title="Drag to reorder">⠿</div>` : ""}
     <div class="item-body">
       <div class="item-text">${escapeHtml(item.text)}</div>
       ${mealsLabel ? `<div class="item-src">${escapeHtml(mealsLabel)}</div>` : ""}
     </div>
     <div class="item-controls">
       ${item.staple && !opts.hideBadge ? `<span class="icon-btn on" style="pointer-events:none;">Staple</span>` : ""}
-      ${opts.scope ? `<button class="icon-btn" data-action="move-up" ${opts.isFirst ? "disabled" : ""} title="Move up">↑</button>
-      <button class="icon-btn" data-action="move-down" ${opts.isLast ? "disabled" : ""} title="Move down">↓</button>` : ""}
-      <button class="icon-btn" data-action="delete-item" title="Remove item">✕</button>
+      ${!shopSelectMode ? `<button class="icon-btn" data-action="delete-item" title="Remove item">✕</button>` : ""}
     </div>
   </div>`;
 }
