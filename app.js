@@ -19,6 +19,13 @@
      nearest recognized neighbour from that saved order.
    ============================================================ */
 
+/* ---------- Icons ----------
+   Inline stroke-style SVGs (currentColor) instead of emoji, so they render
+   consistently across platforms/fonts and inherit button/heading color. */
+const ICON_POT = `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10h18v2a7 7 0 0 1-7 7h-4a7 7 0 0 1-7-7v-2z"/><path d="M1 10h22"/><path d="M8 10V7.5A1.5 1.5 0 0 1 9.5 6H10"/><path d="M15 6h.5A1.5 1.5 0 0 1 17 7.5V10"/></svg>`;
+const ICON_SHUFFLE = `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/></svg>`;
+const ICON_FLAME = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8.5 14.5A2.5 2.5 0 0 0 11 17a2.5 2.5 0 0 0 2.5-2.5c0-1.38-.5-2-1-3-1.07-2.14-.22-4.05 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7.5 7.5 0 1 1-15 0c0-1.15.43-2.29 1-3a2.5 2.5 0 0 0 2.5 2.5z"/></svg>`;
+
 const DB_NAME = "recipe-box";
 const DB_VERSION = 1;
 const STORE = "recipes";
@@ -1009,15 +1016,15 @@ async function renderHome() {
   if (sorted.length === 0) {
     planHtml = `<div class="empty-msg">Nothing planned yet.</div>`;
   } else {
-    const shown = sorted.slice(0, 6);
-    planHtml = shown.map(en => `
+    const rows = sorted.map(en => `
       <div class="home-plan-row" ${en.recipeId ? `data-recipe-id="${escapeAttr(en.recipeId)}"` : ""}>
         <span class="home-plan-day">${en.day ? MEAL_PLAN_DAY_NAMES[en.day].slice(0, 3) : "–"}</span>
         <span class="home-plan-title">${escapeHtml(en.title)}</span>
       </div>`).join("");
-    if (sorted.length > shown.length) {
-      planHtml += `<div class="item-src" style="margin-top:6px;">+ ${sorted.length - shown.length} more</div>`;
-    }
+    // Scrolls internally past a handful of entries instead of truncating --
+    // the point of "at a glance" is to see everything planned so far, not
+    // just a sample, so nothing gets hidden behind a "+N more".
+    planHtml = `<div class="home-plan-list">${rows}</div>`;
   }
 
   const catalog = sortCatalogByUsage(await getItemCatalog());
@@ -1028,6 +1035,13 @@ async function renderHome() {
       ${planHtml}
       <div class="btn-row" style="margin-top:12px;">
         <button class="secondary-btn" id="homeSeePlanBtn">Open Meal Plan</button>
+      </div>
+    </div>
+    <div class="settings-card">
+      <h3>Not sure what to cook?</h3>
+      <p>Pick a few tags or ingredients and see what fits.</p>
+      <div class="btn-row">
+        <button class="primary-btn" id="homeRustleUpBtn" style="margin-top:0;">🎲 Rustle Up</button>
       </div>
     </div>
     <div class="settings-card">
@@ -1048,6 +1062,7 @@ async function renderHome() {
   `;
 
   document.getElementById("homeSeePlanBtn").addEventListener("click", () => goToTab("mealplan"));
+  document.getElementById("homeRustleUpBtn").addEventListener("click", () => renderRustleUp());
   document.getElementById("homeGoShopBtn").addEventListener("click", () => goToTab("shop"));
   document.getElementById("homeGoRecipesBtn").addEventListener("click", () => goToTab("recipes"));
   main.querySelectorAll(".home-plan-row[data-recipe-id]").forEach(row => {
@@ -1071,6 +1086,197 @@ async function renderHome() {
   };
   document.getElementById("homeQuickAddBtn").addEventListener("click", quickAdd);
   quickInput.addEventListener("keydown", (e) => { if (e.key === "Enter") quickAdd(); });
+}
+
+/* ---------- Rustle Up: pick tags/ingredients, get ranked suggestions ---------- */
+
+let rustleSelectedTags = new Set();
+let rustleIngredientTerms = [];
+
+// Scores how well a single ingredient line matches a typed search term:
+// exact word match beats substring match beats the shorthand-style fuzzy
+// match already used for the item catalog (e.g. "chix" -> "chicken") --
+// same idea as findFuzzyCatalogSuggestion, reused here so "rice" reliably
+// surfaces "basmati rice" too, not just literal "rice".
+function ingredientTermScore(term, ingredientName) {
+  const s = term.toLowerCase().trim();
+  const name = ingredientName.toLowerCase();
+  if (!s || !name) return 0;
+  const words = name.split(/\s+/);
+  if (name === s || words.includes(s)) return 3;
+  if (name.includes(s) || s.includes(name)) return 2;
+  // Checked per-word (not against the whole joined name) -- otherwise an
+  // ordinary word like "rice" can spuriously subsequence-match across
+  // several unrelated words strung together (e.g. "ripe...colour...cherry").
+  const ns = normalizeForFuzzy(s);
+  if (ns.length >= 3) {
+    for (const w of words) {
+      const nw = normalizeForFuzzy(w);
+      if (nw.length > ns.length && isSubsequence(ns, nw)) return 1;
+    }
+  }
+  return 0;
+}
+
+// Ranks every recipe against the selected tags/ingredients. Recipes that
+// match nothing are dropped entirely; the rest are sorted by total score
+// so a recipe hitting more/stronger filters surfaces first, without
+// requiring an exact match on every single filter (picking 3 things
+// shouldn't return zero results just because no recipe has all 3).
+function rankRecipesForRustleUp(recipes, tags, ingredientTerms) {
+  const results = [];
+  recipes.forEach(r => {
+    let score = 0;
+    const matchedTags = [];
+    const matchedIngredients = [];
+    tags.forEach(t => {
+      if ((r.tags || []).includes(t)) { score += 2; matchedTags.push(t); }
+    });
+    const parsedNames = (r.ingredients || []).map(line => parseIngredient(line).name || line);
+    ingredientTerms.forEach(term => {
+      let best = 0;
+      parsedNames.forEach(name => { best = Math.max(best, ingredientTermScore(term, name)); });
+      if (best > 0) { score += best; matchedIngredients.push(term); }
+    });
+    if (score > 0) results.push({ recipe: r, score, matchedTags, matchedIngredients });
+  });
+  results.sort((a, b) => b.score - a.score || a.recipe.title.localeCompare(b.recipe.title));
+  return results;
+}
+
+async function renderRustleUp(opts) {
+  opts = opts || {};
+  if (!opts.skipHistory) pushNav("rustleUp", null);
+  rustleSelectedTags = new Set();
+  rustleIngredientTerms = [];
+  const main = document.getElementById("main");
+  const recipes = await getAllRecipes();
+  const tags = allTags(recipes);
+  const catalog = sortCatalogByUsage(await getItemCatalog());
+
+  main.innerHTML = `
+    <button class="back-btn" id="rustleBackBtn">&larr; Back to Home</button>
+    <div class="detail-card">
+      <h2>🎲 Rustle Up</h2>
+      <p style="font-size:0.85rem;color:var(--muted);margin:0 0 12px;">Pick a few tags or ingredients you're in the mood for.</p>
+
+      <div class="section-label">Tags</div>
+      <div class="tag-row" id="rustleTagRow">
+        ${tags.length === 0 ? `<span class="item-src">No tags yet -- tag some recipes first.</span>` : tags.map(t => `<span class="tag rustle-tag-chip" data-tag="${escapeAttr(t)}">${escapeHtml(t)}</span>`).join("")}
+      </div>
+
+      <div class="section-label" style="margin-top:16px;">Ingredients</div>
+      <div class="add-item-row">
+        <input type="text" id="rustleIngInput" list="rustleIngSuggestions" placeholder="e.g. rice, chicken...">
+        <button class="secondary-btn" id="rustleIngAddBtn" style="margin-top:0;">Add</button>
+      </div>
+      <datalist id="rustleIngSuggestions">
+        ${catalog.map(e => `<option value="${escapeAttr(e.name)}">`).join("")}
+      </datalist>
+      <div class="tag-row" id="rustleIngRow" style="margin-top:8px;"></div>
+
+      <div class="section-label" style="margin-top:16px;">Suggestions</div>
+      <div id="rustleResultsArea"></div>
+    </div>
+  `;
+
+  document.getElementById("rustleBackBtn").addEventListener("click", () => history.back());
+
+  let rustleRenderToken = 0;
+
+  function renderIngRow() {
+    document.getElementById("rustleIngRow").innerHTML = rustleIngredientTerms.map(term => `
+      <span class="tag rustle-ing-chip" data-term="${escapeAttr(term)}">${escapeHtml(term)} &times;</span>
+    `).join("");
+    document.querySelectorAll(".rustle-ing-chip").forEach(chip => {
+      chip.addEventListener("click", () => {
+        rustleIngredientTerms = rustleIngredientTerms.filter(t => t !== chip.dataset.term);
+        renderIngRow();
+        renderResults();
+      });
+    });
+  }
+
+  async function renderResults() {
+    // Guards against a slower, stale call (paused below on the getMealPlan
+    // await) finishing after a newer one and clobbering it -- e.g. two
+    // filter changes in quick succession -- by checking this render is
+    // still the latest before writing to the DOM.
+    const token = ++rustleRenderToken;
+    const area = document.getElementById("rustleResultsArea");
+    if (rustleSelectedTags.size === 0 && rustleIngredientTerms.length === 0) {
+      area.innerHTML = `<div class="empty-msg">Pick a tag or add an ingredient above to get suggestions.</div>`;
+      return;
+    }
+    const ranked = rankRecipesForRustleUp(recipes, [...rustleSelectedTags], rustleIngredientTerms);
+    if (ranked.length === 0) {
+      area.innerHTML = `<div class="empty-msg">No recipes match that yet -- try removing a filter.</div>`;
+      return;
+    }
+    const planIds = new Set((await getMealPlan()).map(e => typeof e === "string" ? e : e.recipeId).filter(Boolean));
+    if (token !== rustleRenderToken) return;
+    area.innerHTML = ranked.map(({ recipe: r, matchedTags, matchedIngredients }) => {
+      const inPlan = planIds.has(r.id);
+      const why = [...matchedTags, ...matchedIngredients.map(t => `"${t}"`)];
+      return `<div class="recipe-card" data-id="${escapeAttr(r.id)}">
+        <h3>${escapeHtml(r.title)}</h3>
+        ${starsHtml(r.rating)}
+        <div class="recipe-meta">${[r.servesLabel, r.time].filter(Boolean).join(" &middot; ")}</div>
+        ${why.length ? `<div class="item-src">Matches: ${why.map(escapeHtml).join(", ")}</div>` : ""}
+        <div class="tag-row">${(r.tags || []).map(t => `<span class="tag">${escapeHtml(t)}</span>`).join("")}</div>
+        <div class="card-actions">
+          <button class="mini-btn ${inPlan ? "selected" : ""}" data-action="rustle-plan-toggle" data-id="${escapeAttr(r.id)}">${inPlan ? "✓ In meal plan" : "+ Add to meal plan"}</button>
+        </div>
+      </div>`;
+    }).join("");
+
+    area.querySelectorAll(".recipe-card").forEach(card => {
+      card.addEventListener("click", (e) => {
+        if (e.target.closest("button")) return;
+        renderDetail(card.dataset.id);
+      });
+    });
+    area.querySelectorAll('[data-action="rustle-plan-toggle"]').forEach(btn => {
+      btn.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        const r = recipes.find(x => x.id === btn.dataset.id);
+        if (!r) return;
+        if (await isRecipeInPlan(r.id)) {
+          const planBefore = await getMealPlan();
+          await removeRecipeFromPlanByRecipeId(r.id);
+          showToast(`Removed "${r.title}" from meal plan.`, async () => { await saveMealPlan(planBefore); }, renderResults);
+        } else {
+          await addRecipeToPlan(r.id);
+          showToast(`Added "${r.title}" to meal plan.`, async () => { await removeRecipeFromPlanByRecipeId(r.id); }, renderResults);
+        }
+        renderResults();
+      });
+    });
+  }
+
+  document.querySelectorAll(".rustle-tag-chip").forEach(chip => {
+    chip.addEventListener("click", () => {
+      const t = chip.dataset.tag;
+      if (rustleSelectedTags.has(t)) { rustleSelectedTags.delete(t); chip.classList.remove("selected"); }
+      else { rustleSelectedTags.add(t); chip.classList.add("selected"); }
+      renderResults();
+    });
+  });
+
+  const ingInput = document.getElementById("rustleIngInput");
+  const addIngTerm = () => {
+    const val = ingInput.value.trim().toLowerCase();
+    if (!val || rustleIngredientTerms.includes(val)) return;
+    rustleIngredientTerms.push(val);
+    ingInput.value = "";
+    renderIngRow();
+    renderResults();
+  };
+  document.getElementById("rustleIngAddBtn").addEventListener("click", addIngTerm);
+  ingInput.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); addIngTerm(); } });
+
+  renderIngRow();
+  await renderResults();
 }
 
 // Renders the toolbar (search/tag/add) once, then delegates the actual
@@ -1257,6 +1463,32 @@ function cookedInfoHtml(r) {
   if (!r.timesCooked) return "";
   const times = `Cooked ${r.timesCooked}x`;
   return `<div class="recipe-meta">${times}${r.lastCooked ? ` &middot; last ${escapeHtml(r.lastCooked)}` : ""}</div>`;
+}
+
+// A quick rating nudge right after marking something cooked, since that's
+// the moment you actually have an opinion -- rather than relying on
+// remembering to go rate it later from the recipe detail page. Appended
+// to <body> (not #main) so it survives whatever re-render triggered it.
+function showRatingPrompt(recipeId, title) {
+  const overlay = document.createElement("div");
+  overlay.className = "rating-popup-overlay";
+  overlay.innerHTML = `
+    <div class="rating-popup">
+      <h4>How was it?</h4>
+      <p>${escapeHtml(title)}</p>
+      <div class="stars" id="ratingPopupStars">${starsHtml(0)}</div>
+      <button class="secondary-btn" id="ratingPopupSkipBtn">Skip</button>
+    </div>`;
+  document.body.appendChild(overlay);
+  const close = () => overlay.remove();
+  overlay.querySelectorAll("#ratingPopupStars .star").forEach(el => {
+    el.addEventListener("click", async () => {
+      await setRecipeRating(recipeId, Number(el.dataset.value));
+      close();
+    });
+  });
+  document.getElementById("ratingPopupSkipBtn").addEventListener("click", close);
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
 }
 
 function sourceLineHtml(r) {
@@ -1558,6 +1790,7 @@ async function renderMealPlan() {
           <input type="number" min="1" class="meal-serves-input" id="serves-${escapeAttr(en.id)}" data-entry-id="${escapeAttr(en.id)}" data-base-serves="${en.baseServes}" value="${en.servesOverride || en.baseServes}">
         </div>` : ""}
         <div class="card-actions">
+          ${en.recipeId ? `<button class="mini-btn" data-action="mark-cooked" data-id="${escapeAttr(en.id)}">🍳 Mark as cooked</button>` : ""}
           <button class="mini-btn danger" data-action="remove-entry" data-id="${escapeAttr(en.id)}">Remove from plan</button>
         </div>
       </div>`;
@@ -1603,6 +1836,22 @@ async function renderMealPlan() {
       const planBefore = await getMealPlan();
       await removeEntryFromPlan(id);
       showToast(`Removed "${entry ? entry.title : "meal"}" from plan.`, async () => { await saveMealPlan(planBefore); }, renderMealPlan);
+      renderMealPlan();
+    });
+  });
+  main.querySelectorAll('[data-action="mark-cooked"]').forEach(btn => {
+    btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const en = entries.find(x => x.id === btn.dataset.id);
+      if (!en || !en.recipeId) return;
+      const before = { timesCooked: en.recipe.timesCooked || 0, lastCooked: en.recipe.lastCooked || null };
+      await markRecipeCooked(en.recipeId);
+      showToast(`Marked "${en.title}" as cooked.`, async () => {
+        const recipes = await getAllRecipes();
+        const rec = recipes.find(x => x.id === en.recipeId);
+        if (rec) { rec.timesCooked = before.timesCooked; rec.lastCooked = before.lastCooked; await putRecipe(rec); }
+      }, renderMealPlan);
+      if (!en.recipe.rating) showRatingPrompt(en.recipeId, en.title);
       renderMealPlan();
     });
   });
@@ -2801,10 +3050,34 @@ async function renderSettings() {
       <h3>About</h3>
       <p>Stored locally in this browser only. Export regularly as a backup.</p>
     </div>
+    <div class="settings-card">
+      <h3>Debug</h3>
+      <p id="debugCacheInfo">Checking cache status...</p>
+      <div class="btn-row">
+        <button class="secondary-btn" id="debugReloadBtn">Reload app</button>
+        <button class="secondary-btn" id="debugHardReloadBtn">Clear cache &amp; reload</button>
+      </div>
+    </div>
   `;
   document.getElementById("exportBtn").addEventListener("click", exportLibrary);
   document.getElementById("importBtn").addEventListener("click", () => document.getElementById("fileInput").click());
   document.getElementById("fileInput").addEventListener("change", handleFileImport);
+  document.getElementById("debugReloadBtn").addEventListener("click", () => location.reload());
+  document.getElementById("debugHardReloadBtn").addEventListener("click", async () => {
+    if ("serviceWorker" in navigator) {
+      const regs = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(regs.map(r => r.unregister()));
+    }
+    const cacheNames = await caches.keys();
+    await Promise.all(cacheNames.map(c => caches.delete(c)));
+    location.reload();
+  });
+  (async () => {
+    const info = document.getElementById("debugCacheInfo");
+    const cacheNames = await caches.keys();
+    const reg = "serviceWorker" in navigator ? await navigator.serviceWorker.getRegistration() : null;
+    info.textContent = `Cache: ${cacheNames.join(", ") || "none"} -- SW: ${reg && reg.active ? "active" : "none"}`;
+  })();
   await renderShopHistorySection();
 }
 
@@ -2932,10 +3205,13 @@ function pushTrap() {
   history.pushState({ trap: true }, "", "#" + navStack[navStack.length - 1].screen);
 }
 
-// Forward navigation: descend one level from wherever we are.
+// Forward navigation: descend one level from wherever we are. Pass
+// tab === undefined to inherit the current tab (most screens); pass an
+// explicit tab (including null, for a Home-level screen) to set it.
 function pushNav(screen, tab, params) {
-  navStack.push({ screen, tab: tab || currentTab, params: params || null });
-  currentTab = tab || currentTab;
+  const resolvedTab = tab === undefined ? currentTab : tab;
+  navStack.push({ screen, tab: resolvedTab, params: params || null });
+  currentTab = resolvedTab;
   persistNavStack();
   pushTrap();
 }
@@ -3011,6 +3287,7 @@ async function renderStackTop() {
   else if (top.screen === "manualMeal") renderManualMealForm(opts);
   else if (top.screen === "pasteList") renderPasteList(opts);
   else if (top.screen === "itemCatalog") await renderItemCatalog(opts);
+  else if (top.screen === "rustleUp") await renderRustleUp(opts);
   else { navStack = [{ screen: "home" }]; renderHome(); } // fallback, e.g. review with no pendingImport after reload
 }
 
