@@ -175,6 +175,17 @@ async function saveMealPlanNotesText(text) { await setMeta("mealPlanNotes", text
 async function getShopNotes() { return (await getMeta("shopNotes")) || ""; }
 async function saveShopNotesText(text) { await setMeta("shopNotes", text); }
 
+// A rolling archive of past shopping lists, so clearing/starting a new one
+// doesn't lose the list for good once the undo toast expires.
+async function getShopHistory() { return (await getMeta("shopHistory")) || []; }
+async function saveShopHistory(list) { await setMeta("shopHistory", list); }
+async function archiveShoppingList(items) {
+  if (!items || items.length === 0) return;
+  const history = await getShopHistory();
+  history.unshift({ id: genId(), clearedAt: Date.now(), items });
+  await saveShopHistory(history.slice(0, 20));
+}
+
 // Shared collapsible notes card used by both the Meal Plan and Shopping
 // List tabs. Rendered into its own container so toggling/saving never
 // re-renders (and loses focus on) anything else on the page.
@@ -210,12 +221,6 @@ const UNIT_MAP = {
 const WORD_UNITS = ["clove", "head", "bunch", "tin"];
 
 function normalizeUnit(u) { return UNIT_MAP[u.toLowerCase()] || u.toLowerCase(); }
-
-function unitTypeOf(unit) {
-  if (unit === "g" || unit === "kg") return "weight";
-  if (unit === "ml" || unit === "l") return "volume";
-  return "count";
-}
 
 function stepForUnit(unit) {
   if (unit === "g" || unit === "ml") return 50;
@@ -415,20 +420,21 @@ async function ensureCatalogEntryForName(name, unit, defaultQty) {
   return { entry, suggestion };
 }
 
-// Folds a just-created catalog entry into an existing one the user has
-// confirmed is really the same thing: the typed word becomes a new alias
-// on the target, the redundant entry is removed, and any shopping items
-// that were pointing at it get repointed to the canonical item.
-async function mergeNewEntryIntoExisting(newEntry, targetId) {
+// Folds one catalog entry into another (used both when confirming a
+// just-created entry is really a duplicate, and by the duplicate scanner
+// for older entries): all of the source's name+aliases become aliases on
+// the target, the source is removed, and any shopping items pointing at
+// it get repointed to the canonical item.
+async function mergeCatalogEntries(fromEntry, targetId) {
   const catalog = await getItemCatalog();
   const target = catalog.find(e => e.id === targetId);
   if (!target) return;
-  const alias = (newEntry.aliases && newEntry.aliases[0]) || newEntry.name.toLowerCase();
-  if (!target.aliases.includes(alias)) target.aliases.push(alias);
-  await saveItemCatalog(catalog.filter(e => e.id !== newEntry.id));
+  const incoming = [fromEntry.name.toLowerCase(), ...(fromEntry.aliases || [])];
+  incoming.forEach(a => { if (a && !target.aliases.includes(a)) target.aliases.push(a); });
+  await saveItemCatalog(catalog.filter(e => e.id !== fromEntry.id));
 
   const items = await getShopItems();
-  items.filter(i => i.catalogId === newEntry.id).forEach(i => {
+  items.filter(i => i.catalogId === fromEntry.id).forEach(i => {
     i.catalogId = target.id;
     i.mergeKey = "cat:" + target.id;
     i.name = target.name;
@@ -444,7 +450,7 @@ function offerAliasMerge(newEntry, suggestion, refreshFn) {
     async () => {
       const catalogBefore = await getItemCatalog();
       const itemsBefore = await getShopItems();
-      await mergeNewEntryIntoExisting(newEntry, suggestion.id);
+      await mergeCatalogEntries(newEntry, suggestion.id);
       showToast(`Merged "${newEntry.name}" into "${suggestion.name}".`, async () => {
         await saveItemCatalog(catalogBefore);
         await saveShopItems(itemsBefore);
@@ -565,6 +571,55 @@ async function moveSelectedItems(direction) {
 
 let shopDrag = null;
 
+// Recomputes the dragged item's preview transform and the shift-preview on
+// its siblings from shopDrag.lastClientY + the current scroll position.
+// Pulled out of pointermove so the auto-scroll loop can re-run it every
+// frame while the pointer sits near a viewport edge, without needing its
+// own pointermove events (which don't fire while the page is scrolling
+// under a stationary finger/cursor).
+function updateDragVisual(itemEl) {
+  if (!shopDrag) return;
+  const pageY = shopDrag.lastClientY + window.scrollY;
+  const delta = pageY - shopDrag.startY;
+  itemEl.style.transform = `translateY(${delta}px)`;
+
+  const draggedRect = shopDrag.rects.get(shopDrag.draggedId);
+  const draggedCenter = draggedRect.top + draggedRect.height / 2 + delta;
+
+  let othersIdx = 0;
+  shopDrag.others.forEach(id => {
+    const r = shopDrag.rects.get(id);
+    if (r.top + r.height / 2 < draggedCenter) othersIdx++;
+  });
+
+  shopDrag.others.forEach((id, i) => {
+    const el = shopDrag.elsById.get(id);
+    let shift = 0;
+    if (othersIdx > shopDrag.originalBoundary && i >= shopDrag.originalBoundary && i < othersIdx) shift = -shopDrag.draggedHeight;
+    else if (othersIdx < shopDrag.originalBoundary && i >= othersIdx && i < shopDrag.originalBoundary) shift = shopDrag.draggedHeight;
+    el.style.transform = shift ? `translateY(${shift}px)` : "";
+  });
+
+  shopDrag.targetOthersIdx = othersIdx;
+}
+
+const DRAG_SCROLL_ZONE = 70; // px from top/bottom edge of viewport that triggers auto-scroll
+const DRAG_SCROLL_MAX = 16; // px scrolled per animation frame at the very edge
+
+function dragAutoScrollTick() {
+  if (!shopDrag) return;
+  const y = shopDrag.lastClientY;
+  const vh = window.innerHeight;
+  let speed = 0;
+  if (y < DRAG_SCROLL_ZONE) speed = -DRAG_SCROLL_MAX * (1 - y / DRAG_SCROLL_ZONE);
+  else if (y > vh - DRAG_SCROLL_ZONE) speed = DRAG_SCROLL_MAX * (1 - (vh - y) / DRAG_SCROLL_ZONE);
+  if (speed) {
+    window.scrollBy(0, speed);
+    updateDragVisual(shopDrag.elsById.get(shopDrag.draggedId));
+  }
+  requestAnimationFrame(dragAutoScrollTick);
+}
+
 function wireDragHandle(handle, itemEl, scope) {
   handle.addEventListener("pointerdown", (e) => {
     e.preventDefault();
@@ -573,41 +628,30 @@ function wireDragHandle(handle, itemEl, scope) {
     const siblingEls = [...itemEl.parentElement.querySelectorAll(`.shop-item[data-scope="${scope}"]`)];
     const order = siblingEls.map(el => el.dataset.id);
     const draggedId = itemEl.dataset.id;
-    const rects = new Map(siblingEls.map(el => [el.dataset.id, el.getBoundingClientRect()]));
+    const scrollY = window.scrollY;
+    // Store rects as page-relative (viewport top + current scroll), so the
+    // cached positions stay valid even after auto-scroll moves the page.
+    const rects = new Map(siblingEls.map(el => {
+      const r = el.getBoundingClientRect();
+      return [el.dataset.id, { top: r.top + scrollY, height: r.height }];
+    }));
     const elsById = new Map(siblingEls.map(el => [el.dataset.id, el]));
     const others = order.filter(id => id !== draggedId);
     shopDrag = {
       draggedId, scope, others, elsById, rects,
       originalBoundary: order.indexOf(draggedId),
       draggedHeight: rects.get(draggedId).height,
-      startY: e.clientY,
+      startY: e.clientY + scrollY,
+      lastClientY: e.clientY,
       targetOthersIdx: order.indexOf(draggedId)
     };
     itemEl.classList.add("dragging");
+    requestAnimationFrame(dragAutoScrollTick);
   });
   handle.addEventListener("pointermove", (e) => {
     if (!shopDrag || shopDrag.draggedId !== itemEl.dataset.id) return;
-    const delta = e.clientY - shopDrag.startY;
-    itemEl.style.transform = `translateY(${delta}px)`;
-
-    const draggedRect = shopDrag.rects.get(shopDrag.draggedId);
-    const draggedCenter = draggedRect.top + draggedRect.height / 2 + delta;
-
-    let othersIdx = 0;
-    shopDrag.others.forEach(id => {
-      const r = shopDrag.rects.get(id);
-      if (r.top + r.height / 2 < draggedCenter) othersIdx++;
-    });
-
-    shopDrag.others.forEach((id, i) => {
-      const el = shopDrag.elsById.get(id);
-      let shift = 0;
-      if (othersIdx > shopDrag.originalBoundary && i >= shopDrag.originalBoundary && i < othersIdx) shift = -shopDrag.draggedHeight;
-      else if (othersIdx < shopDrag.originalBoundary && i >= othersIdx && i < shopDrag.originalBoundary) shift = shopDrag.draggedHeight;
-      el.style.transform = shift ? `translateY(${shift}px)` : "";
-    });
-
-    shopDrag.targetOthersIdx = othersIdx;
+    shopDrag.lastClientY = e.clientY;
+    updateDragVisual(itemEl);
   });
   const endDrag = async () => {
     if (!shopDrag || shopDrag.draggedId !== itemEl.dataset.id) return;
@@ -897,6 +941,19 @@ async function removeEntryFromPlan(entryId) {
   const plan = await getMealPlan();
   await saveMealPlan(plan.filter(e => (typeof e === "string" ? e !== entryId : e.id !== entryId)));
 }
+// Lets a planned recipe carry its own "cooking for N" override, separate
+// from the recipe's own serves, so scaling actually affects what the Meal
+// Plan comparison view aggregates -- not just the read-only recipe view.
+async function setMealPlanServesOverride(entryId, value) {
+  const plan = await getMealPlan();
+  const idx = plan.findIndex(e => (typeof e === "string" ? e === entryId : e.id === entryId));
+  if (idx === -1) return;
+  const existing = plan[idx];
+  const upgraded = typeof existing === "string" ? { id: existing, recipeId: existing } : { ...existing };
+  upgraded.servesOverride = value;
+  plan[idx] = upgraded;
+  await saveMealPlan(plan);
+}
 async function getMealPlanEntries() {
   const plan = await getMealPlan();
   const recipes = await getAllRecipes();
@@ -905,9 +962,13 @@ async function getMealPlanEntries() {
     if (entry.recipeId) {
       const r = recipes.find(x => x.id === entry.recipeId);
       if (!r) return null;
-      return { id: entry.id, recipeId: r.id, title: r.title, ingredients: r.ingredients || [], recipe: r };
+      const baseServes = r.serves || detectDefaultServes(r) || null;
+      return {
+        id: entry.id, recipeId: r.id, title: r.title, ingredients: r.ingredients || [], recipe: r,
+        baseServes, servesOverride: entry.servesOverride || null
+      };
     }
-    return { id: entry.id, recipeId: null, title: entry.title || "", ingredients: entry.ingredients || [], recipe: null };
+    return { id: entry.id, recipeId: null, title: entry.title || "", ingredients: entry.ingredients || [], recipe: null, baseServes: null, servesOverride: null };
   }).filter(Boolean);
 }
 
@@ -1157,8 +1218,15 @@ async function renderMealPlanIngredients(entries) {
   const merged = [];
 
   entries.forEach(en => {
+    // A "cooking for N" override scales this recipe's ingredients before
+    // they're merged in, so scaling actually reaches the shopping list.
+    const factor = (en.baseServes && en.servesOverride) ? en.servesOverride / en.baseServes : 1;
     (en.ingredients || []).forEach(raw => {
       const parsed = parseIngredient(raw);
+      if (factor !== 1 && parsed.amount != null) {
+        parsed.amount *= factor;
+        if (parsed.parenAmount != null) parsed.parenAmount *= factor;
+      }
       const catalogEntry = matchCatalog(parsed.name, catalog);
       const displayName = catalogEntry ? catalogEntry.name : parsed.name;
       const mergeKey = buildMergeKey(catalogEntry, parsed.name);
@@ -1239,6 +1307,7 @@ async function addComparisonLineToShoppingList(line) {
     suggestion = result.suggestion;
     refreshItemSuggestions();
   }
+  await bumpItemUsage(catalogEntry.id);
   const items = await getShopItems();
   const mergeKey = buildMergeKey(catalogEntry, line.name);
   const unit = line.unit || catalogEntry.unit || "";
@@ -1277,6 +1346,10 @@ async function renderMealPlan() {
         <h3>${escapeHtml(en.title)}</h3>
         <div class="recipe-meta">${metaParts}</div>
         ${en.recipe ? `<div class="tag-row">${(en.recipe.tags || []).map(t => `<span class="tag">${escapeHtml(t)}</span>`).join("")}</div>` : ""}
+        ${en.baseServes ? `<div class="scale-row">
+          <label for="serves-${escapeAttr(en.id)}">Cooking for</label>
+          <input type="number" min="1" class="meal-serves-input" id="serves-${escapeAttr(en.id)}" data-entry-id="${escapeAttr(en.id)}" data-base-serves="${en.baseServes}" value="${en.servesOverride || en.baseServes}">
+        </div>` : ""}
         <div class="card-actions">
           <button class="mini-btn danger" data-action="remove-entry" data-id="${escapeAttr(en.id)}">Remove from plan</button>
         </div>
@@ -1290,6 +1363,17 @@ async function renderMealPlan() {
   main.innerHTML = html;
   await renderMealPlanNotesCard();
   await renderMealPlanIngredients(entries);
+  main.querySelectorAll(".meal-serves-input").forEach(input => {
+    input.addEventListener("click", (e) => e.stopPropagation());
+    input.addEventListener("keydown", (e) => { if (e.key === "Enter") input.blur(); });
+    input.addEventListener("blur", async () => {
+      const entryId = input.dataset.entryId;
+      const baseServes = Number(input.dataset.baseServes);
+      const val = Number(input.value) || baseServes;
+      await setMealPlanServesOverride(entryId, val === baseServes ? null : val);
+      renderMealPlanIngredients(await getMealPlanEntries());
+    });
+  });
 
   main.querySelectorAll(".recipe-card").forEach(card => {
     card.addEventListener("click", (e) => {
@@ -1318,8 +1402,29 @@ async function renderMealPlan() {
 async function refreshItemSuggestions() {
   const datalist = document.getElementById("itemSuggestions");
   if (!datalist) return;
-  const catalog = await getItemCatalog();
+  const catalog = await sortCatalogByUsage(await getItemCatalog());
   datalist.innerHTML = catalog.map(e => `<option value="${escapeAttr(e.name)}">`).join("");
+}
+
+// Sorts by how often (then how recently) an item has been added, so your
+// regulars surface first in autocomplete instead of alphabetically.
+function sortCatalogByUsage(catalog) {
+  return catalog.slice().sort((a, b) => {
+    const countDiff = (b.useCount || 0) - (a.useCount || 0);
+    if (countDiff !== 0) return countDiff;
+    const recentDiff = (b.lastUsed || 0) - (a.lastUsed || 0);
+    if (recentDiff !== 0) return recentDiff;
+    return a.name.localeCompare(b.name);
+  });
+}
+
+async function bumpItemUsage(catalogId) {
+  const catalog = await getItemCatalog();
+  const entry = catalog.find(e => e.id === catalogId);
+  if (!entry) return;
+  entry.useCount = (entry.useCount || 0) + 1;
+  entry.lastUsed = Date.now();
+  await saveItemCatalog(catalog);
 }
 
 // Shared by the manual add box and the paste-a-list ingester: parses one
@@ -1336,6 +1441,7 @@ async function addTextToShoppingList(raw) {
     suggestion = result.suggestion;
     refreshItemSuggestions();
   }
+  await bumpItemUsage(catalogEntry.id);
   const items = await getShopItems();
   const mergeKey = buildMergeKey(catalogEntry, parsed.name);
   const unit = parsed.unit || catalogEntry.unit || "";
@@ -1408,6 +1514,7 @@ function renderPasteList() {
 // "Default" in the Item Manager, for starting a fresh trip.
 async function startNewShoppingList() {
   const before = await getShopItems();
+  await archiveShoppingList(before);
   const catalog = await getItemCatalog();
   const defaults = catalog.filter(c => c.defaultItem);
   const items = [];
@@ -1418,6 +1525,7 @@ async function startNewShoppingList() {
       checked: false, staple: !!entry.staple, meals: []
     };
     await insertItemByReferenceOrder(items, item);
+    await bumpItemUsage(entry.id);
   }
   await saveShopItems(items);
   showToast(`Started a new list${defaults.length ? ` with ${defaults.length} default item(s)` : ""}.`, async () => { await saveShopItems(before); }, renderShopListArea);
@@ -1503,7 +1611,7 @@ async function renderShopNotesCard() {
 
 async function renderShoppingList() {
   const main = document.getElementById("main");
-  const catalog = await getItemCatalog();
+  const catalog = sortCatalogByUsage(await getItemCatalog());
   main.innerHTML = `
     <div id="shopNotesCard"></div>
     <div class="add-item-row">
@@ -1741,6 +1849,7 @@ async function renderShopListArea() {
   if (clearAllBtn) clearAllBtn.addEventListener("click", async () => {
     const all = await getShopItems();
     if (all.length === 0) return;
+    await archiveShoppingList(all);
     await saveShopItems([]);
     showToast(`Cleared the whole list (${all.length} item(s)).`, async () => { await saveShopItems(all); }, renderShopListArea);
     renderShopListArea();
@@ -1754,18 +1863,20 @@ function renderShopItem(item, opts) {
   const leadBox = shopSelectMode
     ? `<div class="box select-box ${selected ? "checked" : ""}"><svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg></div>`
     : `<div class="box"><svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg></div>`;
-  const qtyRow = !shopSelectMode ? `<div class="qty-row">
+  const qtyRow = !shopSelectMode ? `<span class="qty-row">
       <button class="qty-btn" data-action="qty-dec" title="Decrease">−</button>
       <input type="number" class="qty-input" value="${formatNum(shopItemQty(item))}" step="any">
       <span class="qty-unit">${escapeHtml(item.unit || "")}</span>
       <button class="qty-btn" data-action="qty-inc" title="Increase">+</button>
-    </div>` : "";
+    </span>` : "";
   return `<div class="shop-item ${item.checked ? "checked" : ""} ${selected ? "selected" : ""}" data-id="${escapeAttr(item.id)}" data-scope="${escapeAttr(opts.scope || "")}">
     ${leadBox}
     ${opts.scope && !shopSelectMode ? `<div class="drag-handle" data-action="drag-handle" title="Drag to reorder">⠿</div>` : ""}
     <div class="item-body">
-      <div class="item-text">${escapeHtml(item.name)}</div>
-      ${qtyRow}
+      <div class="item-line">
+        <span class="item-text">${escapeHtml(item.name)}</span>
+        ${qtyRow}
+      </div>
       ${mealsLabel ? `<div class="item-src">${escapeHtml(mealsLabel)}</div>` : ""}
     </div>
     <div class="item-controls">
@@ -1812,33 +1923,30 @@ function startEditItem(el, id) {
 
 /* ---------- Item catalog (its own screen, reached from Shopping List) ---------- */
 
-const CATALOG_UNIT_OPTIONS = ["", "g", "kg", "ml", "l"];
-function unitOptionLabel(u) { return u === "" ? "Count" : u; }
+const UNIT_PRESETS = ["g", "kg", "ml", "l", "bunch", "punnet", "block", "dozen", "pack", "slice"];
+let currentItemSearch = "";
 
-function renderItemCatalogSection(catalog) {
-  const rows = catalog.slice().sort((a, b) => a.name.localeCompare(b.name)).map(entry => `
+function renderItemCatalogRow(entry) {
+  return `
     <div class="ingredient-row" data-id="${escapeAttr(entry.id)}">
       <input type="text" class="ing-name" value="${escapeAttr(entry.name)}">
-      <select class="ing-unit">
-        ${CATALOG_UNIT_OPTIONS.map(u => `<option value="${escapeAttr(u)}" ${u === entry.unit ? "selected" : ""}>${escapeHtml(unitOptionLabel(u))}</option>`).join("")}
-      </select>
-      <input type="number" class="ing-step" value="${entry.step}" title="Step" style="width:60px;">
-      <input type="number" class="ing-defaultqty" value="${entry.defaultQty}" title="Default quantity" style="width:60px;">
+      <input type="text" class="ing-unit" list="unitPresets" value="${escapeAttr(entry.unit)}" placeholder="count" style="width:72px;">
+      <input type="number" class="ing-step" value="${entry.step}" title="Step" style="width:56px;">
+      <input type="number" class="ing-defaultqty" value="${entry.defaultQty}" title="Default quantity" style="width:56px;">
       <label class="staple-check"><input type="checkbox" class="ing-staple" ${entry.staple ? "checked" : ""}> Staple</label>
       <label class="staple-check" title="Automatically add this to every new shopping list"><input type="checkbox" class="ing-default" ${entry.defaultItem ? "checked" : ""}> Auto-add</label>
       <input type="text" class="ing-aliases" value="${escapeAttr((entry.aliases || []).join(", "))}" placeholder="aliases">
       <button class="icon-btn" data-action="delete-ing">✕</button>
-    </div>`).join("");
+    </div>`;
+}
 
+function renderNewItemRow() {
   return `
-    <div id="ingRows">${rows || `<div class="empty-msg">Nothing yet -- add one below.</div>`}</div>
     <div class="ingredient-row" style="border-top:2px solid var(--line); margin-top:10px; padding-top:12px;">
       <input type="text" id="newIngName" placeholder="Name">
-      <select id="newIngUnit">
-        ${CATALOG_UNIT_OPTIONS.map(u => `<option value="${escapeAttr(u)}">${escapeHtml(unitOptionLabel(u))}</option>`).join("")}
-      </select>
-      <input type="number" id="newIngStep" value="1" title="Step" style="width:60px;">
-      <input type="number" id="newIngDefaultQty" value="1" title="Default quantity" style="width:60px;">
+      <input type="text" id="newIngUnit" list="unitPresets" placeholder="count" style="width:72px;">
+      <input type="number" id="newIngStep" value="1" title="Step" style="width:56px;">
+      <input type="number" id="newIngDefaultQty" value="1" title="Default quantity" style="width:56px;">
       <label class="staple-check"><input type="checkbox" id="newIngStaple"> Staple</label>
       <label class="staple-check" title="Automatically add this to every new shopping list"><input type="checkbox" id="newIngDefault"> Auto-add</label>
       <input type="text" id="newIngAliases" placeholder="aliases">
@@ -1856,7 +1964,7 @@ function wireItemCatalogEvents() {
       const entry = catalog.find(e => e.id === id);
       if (!entry) return;
       entry.name = row.querySelector(".ing-name").value.trim() || entry.name;
-      entry.unit = row.querySelector(".ing-unit").value;
+      entry.unit = row.querySelector(".ing-unit").value.trim();
       entry.step = Number(row.querySelector(".ing-step").value) || 1;
       entry.defaultQty = Number(row.querySelector(".ing-defaultqty").value) || 1;
       entry.staple = row.querySelector(".ing-staple").checked;
@@ -1868,7 +1976,7 @@ function wireItemCatalogEvents() {
     row.querySelector(".ing-step").addEventListener("blur", save);
     row.querySelector(".ing-defaultqty").addEventListener("blur", save);
     row.querySelector(".ing-aliases").addEventListener("blur", save);
-    row.querySelector(".ing-unit").addEventListener("change", save);
+    row.querySelector(".ing-unit").addEventListener("blur", save);
     row.querySelector(".ing-staple").addEventListener("change", save);
     row.querySelector(".ing-default").addEventListener("change", save);
     row.querySelector('[data-action="delete-ing"]').addEventListener("click", async () => {
@@ -1879,15 +1987,15 @@ function wireItemCatalogEvents() {
         const cur = await getItemCatalog();
         cur.push(entry);
         await saveItemCatalog(cur);
-      }, renderItemCatalog);
-      renderItemCatalog();
+      }, renderItemCatalogRows);
+      renderItemCatalogRows();
     });
   });
   const addIngBtn = document.getElementById("addIngBtn");
   if (addIngBtn) addIngBtn.addEventListener("click", async () => {
     const name = document.getElementById("newIngName").value.trim();
     if (!name) return;
-    const unit = document.getElementById("newIngUnit").value;
+    const unit = document.getElementById("newIngUnit").value.trim();
     const step = Number(document.getElementById("newIngStep").value) || stepForUnit(unit);
     const defaultQty = Number(document.getElementById("newIngDefaultQty").value) || 1;
     const staple = document.getElementById("newIngStaple").checked;
@@ -1899,27 +2007,116 @@ function wireItemCatalogEvents() {
     const newEntry = { id: slugify(name) + "-" + Date.now().toString(36).slice(-4), name, unit, step, defaultQty, staple, defaultItem, aliases };
     catalog.push(newEntry);
     await saveItemCatalog(catalog);
-    renderItemCatalog();
-    if (suggestion) offerAliasMerge(newEntry, suggestion, renderItemCatalog);
+    renderItemCatalogRows();
+    if (suggestion) offerAliasMerge(newEntry, suggestion, renderItemCatalogRows);
   });
   const newIngUnit = document.getElementById("newIngUnit");
-  if (newIngUnit) newIngUnit.addEventListener("change", (e) => {
-    document.getElementById("newIngStep").value = stepForUnit(e.target.value);
+  if (newIngUnit) newIngUnit.addEventListener("input", (e) => {
+    document.getElementById("newIngStep").value = stepForUnit(e.target.value.trim());
+  });
+}
+
+async function renderItemCatalogRows() {
+  const container = document.getElementById("ingCatalogArea");
+  if (!container) return;
+  const catalog = await getItemCatalog();
+  const term = currentItemSearch.trim().toLowerCase();
+  const filtered = term
+    ? catalog.filter(e => e.name.toLowerCase().includes(term) || (e.aliases || []).some(a => a.toLowerCase().includes(term)))
+    : catalog;
+  const rows = filtered.slice().sort((a, b) => a.name.localeCompare(b.name)).map(renderItemCatalogRow).join("");
+  container.innerHTML = `
+    <div id="ingRows">${rows || `<div class="empty-msg">${term ? "No matches." : "Nothing yet -- add one below."}</div>`}</div>
+    ${renderNewItemRow()}
+  `;
+  wireItemCatalogEvents();
+}
+
+// Scans every pair of catalog entries with the same subsequence-based
+// fuzzy match used at add-time, so drift that slipped in before that
+// existed (or was declined) can be cleaned up in one place.
+function findDuplicatePairs(catalog) {
+  const pairs = [];
+  for (let i = 0; i < catalog.length; i++) {
+    for (let j = i + 1; j < catalog.length; j++) {
+      const a = catalog[i], b = catalog[j];
+      const na = normalizeForFuzzy(a.name), nb = normalizeForFuzzy(b.name);
+      if (na.length < 3 || nb.length < 3 || na.length === nb.length) continue;
+      const shorter = na.length < nb.length ? a : b;
+      const longer = na.length < nb.length ? b : a;
+      const shortNorm = normalizeForFuzzy(shorter.name), longNorm = normalizeForFuzzy(longer.name);
+      if (!isSubsequence(shortNorm, longNorm)) continue;
+      const ratio = shortNorm.length / longNorm.length;
+      if (ratio >= 0.35) pairs.push({ shorter, longer, ratio });
+    }
+  }
+  pairs.sort((x, y) => y.ratio - x.ratio);
+  return pairs;
+}
+
+async function renderDuplicateScan() {
+  const container = document.getElementById("dupResultsArea");
+  if (!container) return;
+  const catalog = await getItemCatalog();
+  const pairs = findDuplicatePairs(catalog);
+  if (pairs.length === 0) {
+    container.innerHTML = `<div class="status-msg status-ok">No likely duplicates found.</div>`;
+    return;
+  }
+  container.innerHTML = `<div class="section-label">Possible duplicates</div>` + pairs.map((p, i) => `
+    <div class="compare-item" data-idx="${i}">
+      <div class="item-body">
+        <div class="item-text">"${escapeHtml(p.shorter.name)}" &rarr; "${escapeHtml(p.longer.name)}"?</div>
+      </div>
+      <button class="secondary-btn" data-action="merge-dup" data-idx="${i}">Merge</button>
+      <button class="icon-btn" data-action="dismiss-dup">✕</button>
+    </div>`).join("");
+
+  container.querySelectorAll('[data-action="merge-dup"]').forEach(btn => {
+    btn.addEventListener("click", async () => {
+      const pair = pairs[Number(btn.dataset.idx)];
+      const catalogBefore = await getItemCatalog();
+      const itemsBefore = await getShopItems();
+      await mergeCatalogEntries(pair.shorter, pair.longer.id);
+      showToast(`Merged "${pair.shorter.name}" into "${pair.longer.name}".`, async () => {
+        await saveItemCatalog(catalogBefore);
+        await saveShopItems(itemsBefore);
+        refreshItemSuggestions();
+        renderItemCatalogRows();
+      }, () => { renderItemCatalogRows(); renderDuplicateScan(); });
+      renderItemCatalogRows();
+      renderDuplicateScan();
+    });
+  });
+  container.querySelectorAll('[data-action="dismiss-dup"]').forEach(btn => {
+    btn.addEventListener("click", () => btn.closest(".compare-item").remove());
   });
 }
 
 async function renderItemCatalog() {
   const main = document.getElementById("main");
-  const catalog = await getItemCatalog();
   main.innerHTML = `
     <button class="back-btn" id="ingBackBtn">&larr; Back to shopping list</button>
     <div class="detail-card">
       <h2>Items</h2>
-      ${renderItemCatalogSection(catalog)}
+      <div class="toolbar">
+        <input type="text" id="itemCatalogSearch" placeholder="Search items..." value="${escapeAttr(currentItemSearch)}">
+        <button class="secondary-btn" id="findDupesBtn">Find duplicates</button>
+      </div>
+      <div id="dupResultsArea"></div>
+      <div id="ingCatalogArea"></div>
+      <datalist id="unitPresets">
+        ${UNIT_PRESETS.map(u => `<option value="${escapeAttr(u)}">`).join("")}
+      </datalist>
     </div>
   `;
   document.getElementById("ingBackBtn").addEventListener("click", () => setTab("shop"));
-  wireItemCatalogEvents();
+  document.getElementById("itemCatalogSearch").addEventListener("input", (e) => {
+    currentItemSearch = e.target.value;
+    renderItemCatalogRows();
+  });
+  document.getElementById("findDupesBtn").addEventListener("click", renderDuplicateScan);
+  await renderItemCatalogRows();
 }
 
 /* ---------- Add / edit a recipe ---------- */
@@ -1993,6 +2190,43 @@ function renderAdd(statusMsg) {
   document.getElementById("reviewJsonBtn").addEventListener("click", handleJsonReview);
 }
 
+// Checks the ingredient textarea against the item catalog and shows which
+// lines don't match anything yet, with a bulk "Add as items" action -- so
+// aliases/items can get built out at recipe-add time instead of only when
+// something is first added to the shopping list.
+async function renderUnmatchedHint() {
+  const hintEl = document.getElementById("unmatchedHint");
+  if (!hintEl) return;
+  const lines = document.getElementById("fIngredients").value.split("\n").map(s => s.trim()).filter(Boolean);
+  if (lines.length === 0) { hintEl.innerHTML = ""; return; }
+  const catalog = await getItemCatalog();
+  const unmatched = [];
+  lines.forEach(line => {
+    const parsed = parseIngredient(line);
+    const name = parsed.name || line;
+    if (!matchCatalog(name, catalog) && !findFuzzyCatalogSuggestion(name, catalog)) {
+      unmatched.push(name);
+    }
+  });
+  if (unmatched.length === 0) { hintEl.innerHTML = ""; return; }
+  hintEl.innerHTML = `<div class="status-msg" style="margin:-6px 0 14px;">
+    ${unmatched.length} ingredient(s) not yet in your Item Manager: ${unmatched.map(n => escapeHtml(n)).join(", ")}.
+    <button class="mini-btn" id="addUnmatchedBtn" type="button" style="margin-left:8px;">Add as items</button>
+  </div>`;
+  document.getElementById("addUnmatchedBtn").addEventListener("click", async () => {
+    const cat = await getItemCatalog();
+    unmatched.forEach(name => {
+      if (matchCatalog(name, cat)) return;
+      cat.push({
+        id: slugify(name) + "-" + Date.now().toString(36).slice(-4) + "-" + Math.random().toString(36).slice(-3),
+        name, aliases: [name.toLowerCase()], staple: false, unit: "", step: stepForUnit(""), defaultQty: 1
+      });
+    });
+    await saveItemCatalog(cat);
+    renderUnmatchedHint();
+  });
+}
+
 function renderRecipeForm(recipe) {
   const main = document.getElementById("main");
   const isEdit = !!recipe;
@@ -2014,6 +2248,7 @@ function renderRecipeForm(recipe) {
       </div>
       <div class="form-field"><label>Tags (comma separated)</label><input type="text" id="fTags" value="${escapeAttr((r.tags || []).join(", "))}"></div>
       <div class="form-field"><label>Ingredients (one per line)</label><textarea id="fIngredients">${escapeHtml((r.ingredients || []).join("\n"))}</textarea></div>
+      <div id="unmatchedHint"></div>
       <div class="form-field"><label>Method (one step per line)</label><textarea id="fMethod">${escapeHtml((r.method || []).join("\n"))}</textarea></div>
       <div class="form-field"><label>Notes</label><textarea id="fNotes" style="min-height:70px;">${escapeHtml(r.notes || "")}</textarea></div>
       <button class="primary-btn" id="saveRecipeBtn">${isEdit ? "Save changes" : "Save recipe"}</button>
@@ -2023,6 +2258,13 @@ function renderRecipeForm(recipe) {
   document.getElementById("formBackBtn").addEventListener("click", () => {
     if (isEdit) renderDetail(r.id); else renderAdd();
   });
+  const ingredientsField = document.getElementById("fIngredients");
+  let unmatchedDebounce = null;
+  ingredientsField.addEventListener("input", () => {
+    clearTimeout(unmatchedDebounce);
+    unmatchedDebounce = setTimeout(renderUnmatchedHint, 400);
+  });
+  renderUnmatchedHint();
   document.getElementById("saveRecipeBtn").addEventListener("click", async () => {
     const title = document.getElementById("fTitle").value.trim();
     const ingredients = document.getElementById("fIngredients").value.split("\n").map(s => s.trim()).filter(Boolean);
@@ -2138,7 +2380,51 @@ async function handleConfirmImport() {
 
 /* ---------- Settings: export / import ---------- */
 
-function renderSettings() {
+function formatHistoryDate(ts) {
+  return new Date(ts).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+async function renderShopHistorySection() {
+  const container = document.getElementById("shopHistoryArea");
+  if (!container) return;
+  const history = await getShopHistory();
+  if (history.length === 0) {
+    container.innerHTML = `<p style="font-size:0.85rem;color:var(--muted);">Nothing archived yet -- past lists show up here after you clear or start a new one.</p>`;
+    return;
+  }
+  container.innerHTML = history.map(h => `
+    <div class="ingredient-row" data-id="${escapeAttr(h.id)}">
+      <div class="item-body" style="flex:1;">
+        <div class="item-text">${formatHistoryDate(h.clearedAt)} &middot; ${h.items.length} item(s)</div>
+      </div>
+      <button class="secondary-btn" data-action="restore-history">Restore</button>
+      <button class="icon-btn" data-action="delete-history">✕</button>
+    </div>`).join("");
+
+  container.querySelectorAll('[data-action="restore-history"]').forEach(btn => {
+    btn.addEventListener("click", async () => {
+      const id = btn.closest(".ingredient-row").dataset.id;
+      const entry = history.find(h => h.id === id);
+      if (!entry) return;
+      const current = await getShopItems();
+      await archiveShoppingList(current);
+      const restored = entry.items.map(i => ({ ...i, id: genId(), checked: false }));
+      await saveShopItems(restored);
+      showToast(`Restored list from ${formatHistoryDate(entry.clearedAt)}.`, async () => { await saveShopItems(current); }, renderShopListArea);
+      renderShopHistorySection();
+    });
+  });
+  container.querySelectorAll('[data-action="delete-history"]').forEach(btn => {
+    btn.addEventListener("click", async () => {
+      const id = btn.closest(".ingredient-row").dataset.id;
+      const cur = await getShopHistory();
+      await saveShopHistory(cur.filter(h => h.id !== id));
+      renderShopHistorySection();
+    });
+  });
+}
+
+async function renderSettings() {
   const main = document.getElementById("main");
   main.innerHTML = `
     <div class="settings-card">
@@ -2154,6 +2440,10 @@ function renderSettings() {
       <div id="importStatus"></div>
     </div>
     <div class="settings-card">
+      <h3>Shopping history</h3>
+      <div id="shopHistoryArea"></div>
+    </div>
+    <div class="settings-card">
       <h3>About</h3>
       <p>Stored locally in this browser only. Export regularly as a backup.</p>
     </div>
@@ -2161,6 +2451,7 @@ function renderSettings() {
   document.getElementById("exportBtn").addEventListener("click", exportLibrary);
   document.getElementById("importBtn").addEventListener("click", () => document.getElementById("fileInput").click());
   document.getElementById("fileInput").addEventListener("change", handleFileImport);
+  await renderShopHistorySection();
 }
 
 async function exportLibrary() {

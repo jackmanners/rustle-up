@@ -1,4 +1,8 @@
-const CACHE_NAME = "rustle-up-v13";
+const CACHE_NAME = "rustle-up-v16";
+// Code files use network-first below so edits show up immediately without
+// bumping this version; it still matters for the app-shell files (HTML,
+// manifest, icons) and as the offline fallback for the code files too.
+const NETWORK_FIRST = ["/app.js", "/styles.css"];
 const ASSETS = [
   "./",
   "./index.html",
@@ -29,11 +33,29 @@ self.addEventListener("activate", (event) => {
   self.clients.claim();
 });
 
-// Cache-first for the app shell; everything here is local anyway
-// (no API calls happen from this app), so this just guarantees the
-// page itself loads with no network at all.
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
+  const url = new URL(event.request.url);
+  const isNetworkFirst = NETWORK_FIRST.some((path) => url.pathname.endsWith(path));
+
+  if (isNetworkFirst) {
+    // Always try the network first so code edits are visible on next
+    // reload; only fall back to whatever's cached if actually offline.
+    event.respondWith(
+      fetch(event.request)
+        .then((response) => {
+          const copy = response.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
+          return response;
+        })
+        .catch(() => caches.match(event.request))
+    );
+    return;
+  }
+
+  // Cache-first for everything else (app shell, icons); no API calls
+  // happen from this app, so this guarantees the page loads with no
+  // network at all once installed.
   event.respondWith(
     caches.match(event.request).then((cached) => {
       if (cached) return cached;
