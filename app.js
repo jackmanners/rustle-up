@@ -424,10 +424,22 @@ function scaleIngredientLine(raw, factor) {
   });
 }
 
+// True if the typed text contains one of this entry's anti-aliases -- terms
+// that should always be excluded from matching it, even though an alias or
+// the name would otherwise line up (e.g. "Bread" excluding "sourdough" so a
+// recipe calling for sourdough doesn't silently get lumped in with it).
+function isAntiAliased(norm, entry) {
+  return (entry.antiAliases || []).some(a => {
+    const x = a.toLowerCase().trim();
+    return x && norm.indexOf(x) !== -1;
+  });
+}
+
 function matchCatalog(name, catalog) {
   const norm = name.toLowerCase();
   let best = null, bestLen = 0;
   catalog.forEach(entry => {
+    if (isAntiAliased(norm, entry)) return;
     (entry.aliases || []).forEach(alias => {
       const a = alias.toLowerCase().trim();
       if (a && norm.indexOf(a) !== -1 && a.length > bestLen) {
@@ -467,8 +479,10 @@ function isSubsequence(needle, haystack) {
 function findFuzzyCatalogSuggestion(name, catalog) {
   const needle = normalizeForFuzzy(name);
   if (needle.length < 3) return null;
+  const norm = name.toLowerCase();
   let best = null, bestRatio = 0;
   catalog.forEach(entry => {
+    if (isAntiAliased(norm, entry)) return;
     // Only test against the canonical display name, never against other
     // aliases -- once a contraction like "bronion" is stored as an alias
     // it's itself short and would otherwise attract *other* unrelated
@@ -489,7 +503,7 @@ async function ensureCatalogEntryForName(name, unit, defaultQty) {
   const suggestion = findFuzzyCatalogSuggestion(name, catalog);
   const entry = {
     id: slugify(name) + "-" + Date.now().toString(36).slice(-4),
-    name, aliases: [name.toLowerCase()], staple: false,
+    name, aliases: [name.toLowerCase()], antiAliases: [], staple: false,
     unit: unit || "", step: stepForUnit(unit || ""), defaultQty: defaultQty || 1
   };
   catalog.push(entry);
@@ -2762,6 +2776,11 @@ function renderItemCatalogRow(entry) {
               <div class="form-field"><label>Default quantity</label><input type="number" class="ing-defaultqty" value="${entry.defaultQty}"></div>
               <div class="form-field"><label>Aliases (comma separated)</label><input type="text" class="ing-aliases" value="${escapeAttr((entry.aliases || []).join(", "))}"></div>
             </div>
+            <div class="form-field">
+              <label>Never match (comma separated)</label>
+              <input type="text" class="ing-anti-aliases" placeholder="e.g. sourdough, sour" value="${escapeAttr((entry.antiAliases || []).join(", "))}">
+              <p class="field-hint">Ingredient text containing any of these will skip this item, even if it would otherwise match -- e.g. add "sourdough" here on "Bread" so a recipe calling for sourdough doesn't get lumped in with plain bread.</p>
+            </div>
           </div>
         </div>
         <button type="button" class="icon-btn shelf-details-btn" data-action="toggle-details" title="More options">⋯</button>
@@ -2827,12 +2846,14 @@ function wireItemCatalogEvents() {
       entry.step = Number(row.querySelector(".ing-step").value) || 1;
       entry.defaultQty = Number(row.querySelector(".ing-defaultqty").value) || 1;
       entry.aliases = row.querySelector(".ing-aliases").value.split(",").map(s => s.trim()).filter(Boolean);
+      entry.antiAliases = row.querySelector(".ing-anti-aliases").value.split(",").map(s => s.trim()).filter(Boolean);
       await saveItemCatalog(catalog);
     };
     row.querySelector(".ing-name").addEventListener("blur", save);
     row.querySelector(".ing-step").addEventListener("blur", save);
     row.querySelector(".ing-defaultqty").addEventListener("blur", save);
     row.querySelector(".ing-aliases").addEventListener("blur", save);
+    row.querySelector(".ing-anti-aliases").addEventListener("blur", save);
     row.querySelector(".ing-unit").addEventListener("blur", save);
 
     row.querySelector('[data-action="toggle-staple"]').addEventListener("click", async () => {
@@ -2897,7 +2918,7 @@ function wireItemCatalogEvents() {
     const newEntry = {
       id: slugify(name) + "-" + Date.now().toString(36).slice(-4), name,
       unit: "", step: 1, defaultQty: 1, staple: false, defaultItem: false,
-      aliases: [name.toLowerCase()], tags: []
+      aliases: [name.toLowerCase()], antiAliases: [], tags: []
     };
     catalog.push(newEntry);
     await saveItemCatalog(catalog);

@@ -371,6 +371,7 @@ textarea {
 .schema-box pre { white-space: pre-wrap; font-size: 0.72rem; color: var(--ink); background: var(--card); padding: 10px; border-radius: 8px; }
 .form-field { margin-bottom: 12px; }
 .form-field label { display:block; font-size:0.76rem; font-weight:600; color:var(--muted); margin-bottom:4px; }
+.field-hint { font-size: 0.74rem; color: var(--muted); margin: 4px 2px 0; line-height: 1.35; }
 .form-field input[type="text"], .form-field input[type="url"], .form-field input[type="number"] {
   width:100%; padding:9px 12px; border:1px solid var(--line); border-radius:8px;
   font-size:0.9rem; background:var(--card); color:var(--ink);
