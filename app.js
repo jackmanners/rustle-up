@@ -45,6 +45,7 @@ const ICON_CLIPBOARD = `<svg viewBox="0 0 24 24" width="15" height="15" fill="no
 const ICON_CHEVRON_DOWN = `<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>`;
 const ICON_EYE = `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>`;
 const ICON_MORE = `<svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg>`;
+const ICON_SHELF = `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="2" y1="19" x2="22" y2="19"/><rect x="4" y="10" width="4" height="9" rx="1"/><rect x="10" y="6" width="4" height="13" rx="1"/><rect x="16" y="12" width="4" height="7" rx="1"/></svg>`;
 
 // Applied immediately (before IndexedDB/DOM setup) to avoid a flash of
 // the wrong theme on load if it's been explicitly overridden.
@@ -1121,6 +1122,12 @@ async function renderHome() {
 
   const catalog = sortCatalogByUsage(await getItemCatalog());
 
+  // A single-line nudge rather than a full card -- Home is meant to fit in
+  // one glance without scrolling, so Shelf gets a lightweight presence here
+  // (unlike the fuller Meal Plan/Rustle Up/Quick Add cards) rather than
+  // competing for the same vertical space.
+  const shelfCount = catalog.length;
+
   main.innerHTML = `
     <div class="settings-card">
       <h3>Meal Plan at a glance</h3>
@@ -1144,8 +1151,14 @@ async function renderHome() {
         ${catalog.map(e => `<option value="${escapeAttr(e.name)}">`).join("")}
       </datalist>
     </div>
+    <div class="home-shelf-strip" id="homeShelfStrip">
+      <span class="home-plan-icon">${ICON_SHELF}</span>
+      <span>${shelfCount} item${shelfCount === 1 ? "" : "s"} on your shelf</span>
+      <span class="home-plan-chevron">›</span>
+    </div>
   `;
 
+  document.getElementById("homeShelfStrip").addEventListener("click", () => goToTab("items"));
   document.getElementById("homeRustleUpBtn").addEventListener("click", () => renderRustleUp());
   main.querySelectorAll(".home-plan-row[data-recipe-id]").forEach(row => {
     row.addEventListener("click", () => renderDetail(row.dataset.recipeId));

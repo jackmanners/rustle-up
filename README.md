@@ -6,10 +6,17 @@ leaves your device except when you choose to export it.
 
 ## What's in this folder
 
-- `index.html` — the whole app (recipes, shopping list, add, settings)
+- `index.html` — the whole app (recipes, meal plan, shopping list, shelf, settings)
 - `manifest.json` — makes it installable as an app on your phone/desktop
 - `sw.js` — service worker, caches the app shell so it works fully offline
 - `icons/` — app icons (192px and 512px, regular + maskable)
+
+**Updating the icon:** browsers and OSes cache installed-PWA icons by URL,
+not by content, so replacing an icon's bytes under the same filename often
+doesn't take effect on already-installed devices. When you change any file
+in `icons/`, bump the `?v=N` query string on every icon reference (in
+`index.html` and `manifest.json`) *and* bump `CACHE_NAME` in `sw.js` — that's
+what actually forces a refetch instead of silently serving the stale icon.
 
 ## Getting it live on GitHub Pages
 
@@ -41,9 +48,10 @@ already local, and the service worker caches the app shell itself.
 ## Adding new recipes
 
 1. Photograph or paste the recipe into a normal Claude chat.
-2. Ask Claude to return it in the rustleUp schema (shown in the app's Add
-   tab, and below).
-3. Paste the JSON it gives you into the **Add** tab in the app.
+2. Ask Claude to return it in the rustleUp schema (shown in the app's
+   Import from JSON section, and below).
+3. In the app: **Recipes → + Add recipe → Import from JSON**, and paste
+   the JSON it gives you there.
 
 ```json
 {
