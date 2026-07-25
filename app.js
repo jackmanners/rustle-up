@@ -3336,7 +3336,8 @@ const SCHEMA_EXAMPLE = {
   title: "Recipe Title",
   source: "e.g. cookbook name & page, or website name",
   sourceUrl: "https://example.com/recipe (optional, if it's online)",
-  tags: ["chicken", "quick", "weeknight"],
+  photo: "https://example.com/photo.jpg (optional, a direct image URL of the finished dish, if you find one)",
+  tags: ["curry", "rice", "vegetarian", "indian"],
   serves: 2,
   time: "20 min",
   ingredients: ["200g chicken breast", "1 lemon"],
@@ -3354,13 +3355,15 @@ function detectDefaultServes(item) {
 }
 
 // Given free rein, an LLM tends to invent a long, overly-specific tag list
-// per recipe -- which fragments the tag vocabulary and makes filtering by
-// tag less useful over time. Capping the count and handing over the tags
-// already in use (so it reuses "chicken" instead of coining "poultry-dish")
-// keeps the vocabulary small and actually useful for filtering.
+// per recipe (individual ingredients, cooking methods, etc.) -- which
+// fragments the tag vocabulary and makes filtering by tag less useful over
+// time. A fixed set of categories to draw from, a cap on count, and the
+// tags already in use (so it reuses "curry" instead of coining
+// "spiced-stew") keeps the vocabulary small and actually useful for
+// filtering. Anything more specific is still easy to add by hand afterward.
 function buildClaudePrompt(existingTags) {
   const tagGuidance = existingTags && existingTags.length
-    ? `Tags already in use across my recipes: ${existingTags.join(", ")}. Reuse these where they fit -- only add a new tag if none of these apply.`
+    ? ` Tags already in use across my recipes: ${existingTags.join(", ")}. Reuse these where they fit -- only add a new one if none of these apply.`
     : "";
   return `Please read the recipe in the link or photo I'm about to share, and return it as a single JSON object (or a JSON array if there's more than one recipe) using exactly this schema -- no extra commentary, just the JSON:
 
@@ -3370,8 +3373,9 @@ Notes:
 - ingredients and method should each be an array of strings, one item/step per entry.
 - serves should be a plain number if you can tell how many it serves.
 - sourceUrl is optional -- include it only if the recipe came from a link.
+- photo is optional -- only include it if you can find a direct image URL (not a webpage link) for a photo of the finished dish, e.g. from the recipe's source page.
 - Only title and ingredients are strictly required; leave other fields blank/empty if unknown.
-- tags: at most 3-4, and only the ones that actually help filtering later (main ingredient, cuisine, or meal type -- not every attribute of the dish). ${tagGuidance}`;
+- tags: 3-4 at most, drawn from these categories -- protein/dietary (meat, fish, vegetarian, vegan), dish type (curry, soup, salad, pasta, rice, stir-fry, bake, sandwich, etc.), and cuisine (thai, indian, mexican, italian, chinese, mediterranean, etc.). Don't tag specific ingredients (no "broccoli" or "coriander") -- I'll add anything more specific by hand.${tagGuidance}`;
 }
 
 async function copyClaudePrompt() {
