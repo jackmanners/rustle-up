@@ -3079,10 +3079,23 @@ window.addEventListener("unhandledrejection", (e) => {
   }
 })();
 
+// Installed PWAs are usually resumed, not reloaded -- a background tab
+// update to the service worker doesn't reach the JS/HTML already sitting
+// in memory. Rather than leaving that silently stale until the app is
+// force-closed, surface a banner the moment a new version actually takes
+// over, so a tap reloads to it immediately.
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
+    const hadController = !!navigator.serviceWorker.controller;
     navigator.serviceWorker.register("sw.js").catch((err) => {
       console.error("Service worker registration failed:", err);
+    });
+    navigator.serviceWorker.addEventListener("controllerchange", () => {
+      if (!hadController) return; // the very first install, not an update
+      const banner = document.getElementById("updateBanner");
+      if (!banner) return;
+      banner.classList.remove("hidden");
+      document.getElementById("updateReloadBtn").addEventListener("click", () => location.reload(), { once: true });
     });
   });
 }
