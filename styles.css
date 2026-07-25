@@ -211,6 +211,9 @@ main { padding: 14px 18px 70px; max-width: 720px; margin: 0 auto; }
   border-radius: 10px; margin-bottom: 8px;
 }
 .detail-card h2 { margin: 0 0 4px; font-family: var(--font-heading); font-size: 1.4rem; letter-spacing: -0.01em; }
+.add-hero { text-align: center; padding: 28px 20px; }
+.add-hero p { color: var(--muted); font-size: 0.9rem; margin: 6px 0 18px; }
+.add-hero .primary-btn { margin-top: 0; padding: 12px 22px; font-size: 0.95rem; }
 .section-label {
   font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.08em;
   color: var(--leaf-dark); margin: 18px 0 8px; padding-bottom: 4px;
@@ -345,7 +348,46 @@ input[type="file"] { display: none; }
 .ingredient-row select {
   padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; font-size: 0.8rem; background: var(--card); color: var(--ink);
 }
-.staple-check { font-size:0.78rem; display:flex; align-items:center; gap:4px; white-space: nowrap; }
+
+/* Item Manager -- a "shelf" of items: name-forward, tag chips instead of
+   checkboxes/dense inline fields, advanced fields tucked behind a
+   per-row disclosure, and drag-to-reorder that persists directly (no
+   separate "update order" snapshot needed, since unlike the shopping
+   list this shelf isn't cleared and rebuilt each trip). */
+.shelf-item { padding: 10px 2px; border-bottom: 1px solid var(--line); }
+.shelf-item:last-child { border-bottom: none; }
+.shelf-item.dragging { position: relative; z-index: 5; background: var(--card); box-shadow: 0 6px 16px var(--shadow); border-radius: 8px; }
+.shelf-item:not(.dragging) { transition: transform 0.12s ease; }
+.shelf-item-main { display: flex; align-items: flex-start; gap: 8px; }
+.shelf-item-body { flex: 1; min-width: 0; }
+.shelf-name-input {
+  width: 100%; border: none; border-bottom: 1px solid transparent; background: transparent;
+  font-family: var(--font-heading); font-size: 1rem; font-weight: 600;
+  color: var(--ink); padding: 2px 0; margin-bottom: 5px;
+}
+.shelf-name-input:focus { outline: none; border-bottom-color: var(--leaf); }
+.item-tag-row { align-items: center; row-gap: 6px; }
+.chip-toggle {
+  cursor: pointer; background: var(--cream); color: var(--muted); border: 1px solid var(--line);
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+.chip-toggle.staple-chip.chip-on { background: var(--staple-bg); color: var(--staple); border-color: var(--staple-line); }
+.chip-toggle.default-chip.chip-on { background: var(--leaf-bg); color: var(--leaf-dark); border-color: var(--leaf); }
+.item-tag-chip { cursor: pointer; }
+.item-tag-add, .item-tag-input {
+  cursor: pointer; background: none; border: 1px dashed var(--line); color: var(--muted);
+  font-size: 0.66rem; font-weight: 600; padding: 2px 8px; border-radius: 99px;
+}
+.item-tag-input { border-style: solid; width: 80px; cursor: text; }
+.shelf-details-btn { font-weight: 700; letter-spacing: 1px; }
+.shelf-item-details { margin: 12px 0 2px 26px; }
+.shelf-item-details.hidden { display: none; }
+.shelf-new-item { padding-top: 14px; }
+.shelf-new-item .shelf-item-main { gap: 8px; align-items: center; }
+.shelf-new-item .shelf-name-input {
+  border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; background: var(--card);
+  font-family: inherit; font-weight: 400; font-size: 0.9rem; margin-bottom: 0;
+}
 
 /* Quantity stepper on shopping items -- deliberately quiet, so it reads
    as secondary detail inline with the item name rather than competing with it */

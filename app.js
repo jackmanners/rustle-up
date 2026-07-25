@@ -43,16 +43,16 @@ let mealPlanNotesOpen = false;
 let shopNotesOpen = false;
 
 const DEFAULT_ITEM_CATALOG = [
-  { id: "salt", name: "Salt", staple: true, aliases: ["salt"], unit: "", step: 1, defaultQty: 1 },
-  { id: "black-pepper", name: "Black pepper", staple: true, aliases: ["black pepper", "pepper"], unit: "", step: 1, defaultQty: 1 },
-  { id: "olive-oil", name: "Olive oil", staple: true, aliases: ["olive oil", "extra virgin olive oil"], unit: "", step: 1, defaultQty: 1 },
-  { id: "cooking-oil", name: "Cooking oil", staple: true, aliases: ["vegetable oil", "sesame oil", "sunflower oil"], unit: "", step: 1, defaultQty: 1 },
-  { id: "sugar", name: "Sugar", staple: true, aliases: ["sugar"], unit: "", step: 1, defaultQty: 1 },
-  { id: "flour", name: "Plain flour", staple: true, aliases: ["plain flour", "flour"], unit: "", step: 1, defaultQty: 1 },
-  { id: "vinegar", name: "Vinegar", staple: true, aliases: ["vinegar"], unit: "", step: 1, defaultQty: 1 },
-  { id: "soy-sauce", name: "Soy sauce", staple: true, aliases: ["soy sauce"], unit: "", step: 1, defaultQty: 1 },
-  { id: "stock-cube", name: "Stock cubes", staple: true, aliases: ["stock cube", "stock cubes"], unit: "", step: 1, defaultQty: 1 },
-  { id: "rice-pouch", name: "Basmati rice (pouch)", staple: false,
+  { id: "salt", name: "Salt", staple: true, tags: ["staple"], aliases: ["salt"], unit: "", step: 1, defaultQty: 1 },
+  { id: "black-pepper", name: "Black pepper", staple: true, tags: ["staple"], aliases: ["black pepper", "pepper"], unit: "", step: 1, defaultQty: 1 },
+  { id: "olive-oil", name: "Olive oil", staple: true, tags: ["staple"], aliases: ["olive oil", "extra virgin olive oil"], unit: "", step: 1, defaultQty: 1 },
+  { id: "cooking-oil", name: "Cooking oil", staple: true, tags: ["staple"], aliases: ["vegetable oil", "sesame oil", "sunflower oil"], unit: "", step: 1, defaultQty: 1 },
+  { id: "sugar", name: "Sugar", staple: true, tags: ["staple"], aliases: ["sugar"], unit: "", step: 1, defaultQty: 1 },
+  { id: "flour", name: "Plain flour", staple: true, tags: ["staple"], aliases: ["plain flour", "flour"], unit: "", step: 1, defaultQty: 1 },
+  { id: "vinegar", name: "Vinegar", staple: true, tags: ["staple"], aliases: ["vinegar"], unit: "", step: 1, defaultQty: 1 },
+  { id: "soy-sauce", name: "Soy sauce", staple: true, tags: ["staple"], aliases: ["soy sauce"], unit: "", step: 1, defaultQty: 1 },
+  { id: "stock-cube", name: "Stock cubes", staple: true, tags: ["staple"], aliases: ["stock cube", "stock cubes"], unit: "", step: 1, defaultQty: 1 },
+  { id: "rice-pouch", name: "Basmati rice (pouch)", staple: false, tags: [],
     aliases: ["rice sachet", "packet of rice", "wholegrain rice", "basmati rice", "wholegrain basmati rice", "cooked rice"], unit: "", step: 1, defaultQty: 1 }
 ];
 
@@ -200,11 +200,26 @@ async function seedItemCatalogIfEmpty() {
   if (legacy && legacy.length > 0) {
     await saveItemCatalog(legacy.map(e => ({
       id: e.id, name: e.name, aliases: e.aliases || [], staple: !!e.staple,
+      tags: e.staple ? ["staple"] : [],
       unit: "", step: 1, defaultQty: 1
     })));
   } else {
     await saveItemCatalog(DEFAULT_ITEM_CATALOG.map(e => ({ ...e })));
   }
+}
+
+// One-time reconciliation for catalogs saved before "staple" became a tag
+// (entry.tags including "staple") rather than a lone boolean -- without
+// this, existing staple items would silently show as un-tagged since the
+// UI now reads entry.tags, not entry.staple, to decide what to display.
+async function migrateStapleTags() {
+  const catalog = await getItemCatalog();
+  let changed = false;
+  catalog.forEach(e => {
+    e.tags = e.tags || [];
+    if (e.staple && !e.tags.includes("staple")) { e.tags.push("staple"); changed = true; }
+  });
+  if (changed) await saveItemCatalog(catalog);
 }
 
 async function getMealPlanNotes() { return (await getMeta("mealPlanNotes")) || ""; }
@@ -2534,7 +2549,7 @@ let currentItemTagFilter = "";
 // reads as one more tag rather than a second, inconsistent system.
 function allItemTags(catalog) {
   const set = new Set();
-  catalog.forEach(e => (e.tags || []).forEach(t => set.add(t)));
+  catalog.forEach(e => (e.tags || []).forEach(t => { if (t !== "staple") set.add(t); }));
   return [...set].sort();
 }
 function matchesItemTagFilter(entry) {
@@ -2543,40 +2558,102 @@ function matchesItemTagFilter(entry) {
   return (entry.tags || []).includes(currentItemTagFilter);
 }
 
+// "Staple" is a real tag (entry.tags includes "staple"), not a separate
+// checkbox -- entry.staple is kept in sync as a derived boolean purely
+// because the shopping list's Staples section / saved ordering already
+// depend on that field, and it wasn't worth rearchitecting that working,
+// well-tested split just to change how staple-ness is *edited*.
+const STAPLE_TAG = "staple";
+function syncStapleFromTags(entry) {
+  entry.staple = (entry.tags || []).includes(STAPLE_TAG);
+}
+
+function itemTagChipsHtml(entry) {
+  const custom = (entry.tags || []).filter(t => t !== STAPLE_TAG);
+  const isStaple = (entry.tags || []).includes(STAPLE_TAG);
+  let html = `<div class="tag-row item-tag-row">`;
+  html += `<span class="tag chip-toggle staple-chip ${isStaple ? "chip-on" : ""}" data-action="toggle-staple" title="Staples get their own section on the shopping list">Staple</span>`;
+  html += `<span class="tag chip-toggle default-chip ${entry.defaultItem ? "chip-on" : ""}" data-action="toggle-default" title="Automatically add this to every new shopping list">Auto-add</span>`;
+  custom.forEach(t => {
+    html += `<span class="tag item-tag-chip" data-tag="${escapeAttr(t)}" title="Tap to remove">${escapeHtml(t)} &times;</span>`;
+  });
+  html += `<button type="button" class="tag item-tag-add" data-action="add-tag">+ tag</button>`;
+  html += `</div>`;
+  return html;
+}
+
 function renderItemCatalogRow(entry) {
   return `
-    <div class="ingredient-row" data-id="${escapeAttr(entry.id)}">
-      <input type="text" class="ing-name" value="${escapeAttr(entry.name)}">
-      <input type="text" class="ing-unit" list="unitPresets" value="${escapeAttr(entry.unit)}" placeholder="count" style="width:72px;">
-      <input type="number" class="ing-step" value="${entry.step}" title="Step" style="width:56px;">
-      <input type="number" class="ing-defaultqty" value="${entry.defaultQty}" title="Default quantity" style="width:56px;">
-      <label class="staple-check"><input type="checkbox" class="ing-staple" ${entry.staple ? "checked" : ""}> Staple</label>
-      <label class="staple-check" title="Automatically add this to every new shopping list"><input type="checkbox" class="ing-default" ${entry.defaultItem ? "checked" : ""}> Auto-add</label>
-      <input type="text" class="ing-aliases" value="${escapeAttr((entry.aliases || []).join(", "))}" placeholder="aliases">
-      <input type="text" class="ing-tags" value="${escapeAttr((entry.tags || []).join(", "))}" placeholder="tags (dairy, frozen...)">
-      <button class="icon-btn" data-action="delete-ing">✕</button>
+    <div class="shelf-item" data-id="${escapeAttr(entry.id)}">
+      <div class="shelf-item-main">
+        <div class="drag-handle" data-action="drag-handle" title="Drag to reorder">⠿</div>
+        <div class="shelf-item-body">
+          <input type="text" class="ing-name shelf-name-input" value="${escapeAttr(entry.name)}">
+          ${itemTagChipsHtml(entry)}
+          <div class="shelf-item-details hidden" data-details>
+            <div class="form-row-2">
+              <div class="form-field"><label>Unit</label><input type="text" class="ing-unit" list="unitPresets" value="${escapeAttr(entry.unit)}" placeholder="count"></div>
+              <div class="form-field"><label>Step</label><input type="number" class="ing-step" value="${entry.step}"></div>
+            </div>
+            <div class="form-row-2">
+              <div class="form-field"><label>Default quantity</label><input type="number" class="ing-defaultqty" value="${entry.defaultQty}"></div>
+              <div class="form-field"><label>Aliases (comma separated)</label><input type="text" class="ing-aliases" value="${escapeAttr((entry.aliases || []).join(", "))}"></div>
+            </div>
+          </div>
+        </div>
+        <button type="button" class="icon-btn shelf-details-btn" data-action="toggle-details" title="More options">⋯</button>
+        <button class="icon-btn" data-action="delete-ing" title="Delete">✕</button>
+      </div>
     </div>`;
 }
 
 function renderNewItemRow() {
   return `
-    <div class="ingredient-row" style="border-top:2px solid var(--line); margin-top:10px; padding-top:12px;">
-      <input type="text" id="newIngName" placeholder="Name">
-      <input type="text" id="newIngUnit" list="unitPresets" placeholder="count" style="width:72px;">
-      <input type="number" id="newIngStep" value="1" title="Step" style="width:56px;">
-      <input type="number" id="newIngDefaultQty" value="1" title="Default quantity" style="width:56px;">
-      <label class="staple-check"><input type="checkbox" id="newIngStaple"> Staple</label>
-      <label class="staple-check" title="Automatically add this to every new shopping list"><input type="checkbox" id="newIngDefault"> Auto-add</label>
-      <input type="text" id="newIngAliases" placeholder="aliases">
-      <input type="text" id="newIngTags" placeholder="tags (dairy, frozen...)">
-      <button class="secondary-btn" id="addIngBtn">Add</button>
+    <div class="shelf-item shelf-new-item">
+      <div class="shelf-item-main">
+        <input type="text" id="newIngName" class="shelf-name-input" placeholder="Add an item to the shelf...">
+        <button class="secondary-btn" id="addIngBtn">Add</button>
+      </div>
     </div>
   `;
 }
 
+function startAddItemTag(row, id) {
+  const addBtn = row.querySelector('[data-action="add-tag"]');
+  if (!addBtn) return;
+  const input = document.createElement("input");
+  input.type = "text";
+  input.className = "item-tag-input";
+  input.placeholder = "tag";
+  addBtn.replaceWith(input);
+  input.focus();
+  let done = false;
+  const commit = async () => {
+    if (done) return;
+    done = true;
+    const val = input.value.trim().toLowerCase();
+    if (val) {
+      const catalog = await getItemCatalog();
+      const entry = catalog.find(e => e.id === id);
+      if (entry) {
+        entry.tags = entry.tags || [];
+        if (!entry.tags.includes(val)) entry.tags.push(val);
+        syncStapleFromTags(entry);
+        await saveItemCatalog(catalog);
+      }
+    }
+    renderItemCatalogRows();
+  };
+  input.addEventListener("blur", commit);
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") input.blur();
+    if (e.key === "Escape") { input.value = ""; input.blur(); }
+  });
+}
+
 function wireItemCatalogEvents() {
   const main = document.getElementById("main");
-  main.querySelectorAll(".ingredient-row[data-id]").forEach(row => {
+  main.querySelectorAll(".shelf-item[data-id]").forEach(row => {
     const id = row.dataset.id;
     const save = async () => {
       const catalog = await getItemCatalog();
@@ -2586,20 +2663,52 @@ function wireItemCatalogEvents() {
       entry.unit = row.querySelector(".ing-unit").value.trim();
       entry.step = Number(row.querySelector(".ing-step").value) || 1;
       entry.defaultQty = Number(row.querySelector(".ing-defaultqty").value) || 1;
-      entry.staple = row.querySelector(".ing-staple").checked;
-      entry.defaultItem = row.querySelector(".ing-default").checked;
       entry.aliases = row.querySelector(".ing-aliases").value.split(",").map(s => s.trim()).filter(Boolean);
-      entry.tags = row.querySelector(".ing-tags").value.split(",").map(s => s.trim().toLowerCase()).filter(Boolean);
       await saveItemCatalog(catalog);
     };
     row.querySelector(".ing-name").addEventListener("blur", save);
     row.querySelector(".ing-step").addEventListener("blur", save);
     row.querySelector(".ing-defaultqty").addEventListener("blur", save);
     row.querySelector(".ing-aliases").addEventListener("blur", save);
-    row.querySelector(".ing-tags").addEventListener("blur", save);
     row.querySelector(".ing-unit").addEventListener("blur", save);
-    row.querySelector(".ing-staple").addEventListener("change", save);
-    row.querySelector(".ing-default").addEventListener("change", save);
+
+    row.querySelector('[data-action="toggle-staple"]').addEventListener("click", async () => {
+      const catalog = await getItemCatalog();
+      const entry = catalog.find(e => e.id === id);
+      if (!entry) return;
+      entry.tags = entry.tags || [];
+      if (entry.tags.includes(STAPLE_TAG)) entry.tags = entry.tags.filter(t => t !== STAPLE_TAG);
+      else entry.tags.push(STAPLE_TAG);
+      syncStapleFromTags(entry);
+      await saveItemCatalog(catalog);
+      renderItemCatalogRows();
+    });
+    row.querySelector('[data-action="toggle-default"]').addEventListener("click", async () => {
+      const catalog = await getItemCatalog();
+      const entry = catalog.find(e => e.id === id);
+      if (!entry) return;
+      entry.defaultItem = !entry.defaultItem;
+      await saveItemCatalog(catalog);
+      renderItemCatalogRows();
+    });
+    row.querySelectorAll(".item-tag-chip").forEach(chip => {
+      chip.addEventListener("click", async () => {
+        const catalog = await getItemCatalog();
+        const entry = catalog.find(e => e.id === id);
+        if (!entry) return;
+        entry.tags = (entry.tags || []).filter(t => t !== chip.dataset.tag);
+        syncStapleFromTags(entry);
+        await saveItemCatalog(catalog);
+        renderItemCatalogRows();
+      });
+    });
+    const addTagBtn = row.querySelector('[data-action="add-tag"]');
+    if (addTagBtn) addTagBtn.addEventListener("click", () => startAddItemTag(row, id));
+
+    row.querySelector('[data-action="toggle-details"]').addEventListener("click", () => {
+      row.querySelector("[data-details]").classList.toggle("hidden");
+    });
+
     row.querySelector('[data-action="delete-ing"]').addEventListener("click", async () => {
       const catalog = await getItemCatalog();
       const entry = catalog.find(e => e.id === id);
@@ -2611,31 +2720,119 @@ function wireItemCatalogEvents() {
       }, renderItemCatalogRows);
       renderItemCatalogRows();
     });
+
+    const handle = row.querySelector('[data-action="drag-handle"]');
+    if (handle) wireItemDragHandle(handle, row);
   });
   const addIngBtn = document.getElementById("addIngBtn");
   if (addIngBtn) addIngBtn.addEventListener("click", async () => {
-    const name = document.getElementById("newIngName").value.trim();
+    const nameInput = document.getElementById("newIngName");
+    const name = nameInput.value.trim();
     if (!name) return;
-    const unit = document.getElementById("newIngUnit").value.trim();
-    const step = Number(document.getElementById("newIngStep").value) || stepForUnit(unit);
-    const defaultQty = Number(document.getElementById("newIngDefaultQty").value) || 1;
-    const staple = document.getElementById("newIngStaple").checked;
-    const defaultItem = document.getElementById("newIngDefault").checked;
-    const aliases = document.getElementById("newIngAliases").value.split(",").map(s => s.trim()).filter(Boolean);
-    if (aliases.length === 0) aliases.push(name.toLowerCase());
-    const tags = document.getElementById("newIngTags").value.split(",").map(s => s.trim().toLowerCase()).filter(Boolean);
     const catalog = await getItemCatalog();
     const suggestion = findFuzzyCatalogSuggestion(name, catalog);
-    const newEntry = { id: slugify(name) + "-" + Date.now().toString(36).slice(-4), name, unit, step, defaultQty, staple, defaultItem, aliases, tags };
+    const newEntry = {
+      id: slugify(name) + "-" + Date.now().toString(36).slice(-4), name,
+      unit: "", step: 1, defaultQty: 1, staple: false, defaultItem: false,
+      aliases: [name.toLowerCase()], tags: []
+    };
     catalog.push(newEntry);
     await saveItemCatalog(catalog);
     renderItemCatalogRows();
     if (suggestion) offerAliasMerge(newEntry, suggestion, renderItemCatalogRows);
   });
-  const newIngUnit = document.getElementById("newIngUnit");
-  if (newIngUnit) newIngUnit.addEventListener("input", (e) => {
-    document.getElementById("newIngStep").value = stepForUnit(e.target.value.trim());
+  const newIngNameInput = document.getElementById("newIngName");
+  if (newIngNameInput) newIngNameInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); addIngBtn.click(); }
   });
+}
+
+// Transform-only drag preview, same approach as the shopping list's
+// drag-to-reorder (see wireDragHandle): the dragged row's DOM position
+// never changes mid-gesture, only its CSS transform, and the real order
+// is written once on release -- this is what makes it not get "stuck"
+// under an active pointer capture.
+let itemDrag = null;
+
+function updateItemDragVisual(itemEl) {
+  if (!itemDrag) return;
+  const pageY = itemDrag.lastClientY + window.scrollY;
+  const delta = pageY - itemDrag.startY;
+  itemEl.style.transform = `translateY(${delta}px)`;
+
+  const draggedRect = itemDrag.rects.get(itemDrag.draggedId);
+  const draggedCenter = draggedRect.top + draggedRect.height / 2 + delta;
+
+  let othersIdx = 0;
+  itemDrag.others.forEach(id => {
+    const r = itemDrag.rects.get(id);
+    if (r.top + r.height / 2 < draggedCenter) othersIdx++;
+  });
+
+  itemDrag.others.forEach((id, i) => {
+    const el = itemDrag.elsById.get(id);
+    let shift = 0;
+    if (othersIdx > itemDrag.originalBoundary && i >= itemDrag.originalBoundary && i < othersIdx) shift = -itemDrag.draggedHeight;
+    else if (othersIdx < itemDrag.originalBoundary && i >= othersIdx && i < itemDrag.originalBoundary) shift = itemDrag.draggedHeight;
+    el.style.transform = shift ? `translateY(${shift}px)` : "";
+  });
+
+  itemDrag.targetOthersIdx = othersIdx;
+}
+
+function wireItemDragHandle(handle, itemEl) {
+  handle.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    try { handle.setPointerCapture(e.pointerId); } catch (err) { /* best-effort */ }
+    const siblingEls = [...itemEl.parentElement.querySelectorAll(".shelf-item[data-id]")];
+    const order = siblingEls.map(el => el.dataset.id);
+    const draggedId = itemEl.dataset.id;
+    const scrollY = window.scrollY;
+    const rects = new Map(siblingEls.map(el => {
+      const r = el.getBoundingClientRect();
+      return [el.dataset.id, { top: r.top + scrollY, height: r.height }];
+    }));
+    const elsById = new Map(siblingEls.map(el => [el.dataset.id, el]));
+    const others = order.filter(id => id !== draggedId);
+    itemDrag = {
+      draggedId, others, elsById, rects,
+      originalBoundary: order.indexOf(draggedId),
+      draggedHeight: rects.get(draggedId).height,
+      startY: e.clientY + scrollY,
+      lastClientY: e.clientY,
+      targetOthersIdx: order.indexOf(draggedId)
+    };
+    itemEl.classList.add("dragging");
+  });
+  handle.addEventListener("pointermove", (e) => {
+    if (!itemDrag || itemDrag.draggedId !== itemEl.dataset.id) return;
+    itemDrag.lastClientY = e.clientY;
+    updateItemDragVisual(itemEl);
+  });
+  const endDrag = async () => {
+    if (!itemDrag || itemDrag.draggedId !== itemEl.dataset.id) return;
+    const { others, targetOthersIdx, elsById, draggedId } = itemDrag;
+    const finalOrder = others.slice();
+    finalOrder.splice(targetOthersIdx, 0, draggedId);
+    elsById.forEach(el => { el.style.transform = ""; });
+    itemEl.classList.remove("dragging");
+    itemDrag = null;
+
+    // finalOrder only covers the currently-visible (search/tag-filtered)
+    // rows -- splice those back into their slots within the full catalog,
+    // leaving anything filtered out of view untouched (same pattern as
+    // applyScopeOrder for the shopping list's main/staple split).
+    const catalog = await getItemCatalog();
+    const byId = new Map(catalog.map(e => [e.id, e]));
+    const visibleSet = new Set(finalOrder);
+    let idx = 0;
+    const reordered = catalog.map(e => visibleSet.has(e.id) ? byId.get(finalOrder[idx++]) : e);
+    await saveItemCatalog(reordered);
+    renderItemCatalogRows();
+  };
+  handle.addEventListener("pointerup", endDrag);
+  handle.addEventListener("pointercancel", endDrag);
 }
 
 async function renderItemCatalogRows() {
@@ -2647,7 +2844,10 @@ async function renderItemCatalogRows() {
     if (!matchesItemTagFilter(e)) return false;
     return !term || e.name.toLowerCase().includes(term) || (e.aliases || []).some(a => a.toLowerCase().includes(term));
   });
-  const rows = filtered.slice().sort((a, b) => a.name.localeCompare(b.name)).map(renderItemCatalogRow).join("");
+  // Preserves the shelf's own order (drag-to-reorder writes straight back
+  // into the catalog array) rather than forcing alphabetical -- searching
+  // or filtering narrows what's shown without reshuffling the shelf.
+  const rows = filtered.map(renderItemCatalogRow).join("");
   container.innerHTML = `
     <div id="ingRows">${rows || `<div class="empty-msg">${term ? "No matches." : "Nothing yet -- add one below."}</div>`}</div>
     ${renderNewItemRow()}
@@ -2801,32 +3001,68 @@ async function copyClaudePrompt() {
   }
 }
 
+// Manual entry is the primary, front-and-center path -- this is a
+// self-contained recipe app first. JSON import is offered as a secondary
+// option for bulk/bring-your-own-data cases, and AI assistance (asking an
+// LLM to convert a recipe photo/link into that JSON) is tucked a level
+// further in as a helper for that import path, not the headline feature.
+let addImportOpen = false;
+let addAiHelpOpen = false;
+
 function renderAdd(statusMsg, opts) {
   opts = opts || {};
   if (!opts.skipHistory) pushNav("add", "recipes");
+  addImportOpen = !!statusMsg; // land with the import section open if we're showing an import result/error
+  addAiHelpOpen = false;
   const main = document.getElementById("main");
-  main.innerHTML = `
-    <button class="back-btn" id="addBackBtn">&larr; Back to recipes</button>
-    <div class="settings-card">
-      <h3>Add manually</h3>
-      <div class="btn-row"><button class="primary-btn" id="manualAddBtn" style="margin-top:0;">Add manually</button></div>
-    </div>
-    <div class="settings-card">
-      <h3>Add via Claude</h3>
-      <div class="btn-row"><button class="secondary-btn" id="copyPromptBtn">Copy prompt for Claude</button></div>
-      <textarea id="jsonInput" placeholder="Paste recipe JSON here..." style="margin-top:12px;"></textarea>
-      <button class="primary-btn" id="reviewJsonBtn">Review before adding</button>
-      ${statusMsg ? statusMsg : ""}
-    </div>
-    <div class="schema-box">
-      <pre>${escapeHtml(JSON.stringify(SCHEMA_EXAMPLE, null, 2))}</pre>
-      <div>Only <code>title</code> and <code>ingredients</code> are required.</div>
-    </div>
-  `;
-  document.getElementById("addBackBtn").addEventListener("click", () => history.back());
-  document.getElementById("manualAddBtn").addEventListener("click", () => renderRecipeForm(null));
-  document.getElementById("copyPromptBtn").addEventListener("click", copyClaudePrompt);
-  document.getElementById("reviewJsonBtn").addEventListener("click", handleJsonReview);
+
+  function render() {
+    main.innerHTML = `
+      <button class="back-btn" id="addBackBtn">&larr; Back to recipes</button>
+      <div class="detail-card add-hero">
+        <h2>Add a recipe</h2>
+        <p>Write it out yourself -- titles, ingredients, method, all of it.</p>
+        <button class="primary-btn" id="manualAddBtn">+ Write a new recipe</button>
+      </div>
+
+      <div class="notes-card">
+        <button class="notes-toggle ${addImportOpen ? "open" : ""}" id="importToggle">
+          <span class="chevron">▸</span><span>Import from JSON</span>
+        </button>
+        ${addImportOpen ? `<div class="notes-body">
+          <p style="font-size:0.85rem;color:var(--muted);margin:0 0 10px;">Paste a recipe already in this app's JSON shape -- from an export, a script, or converted by hand.</p>
+          <textarea id="jsonInput" placeholder="Paste recipe JSON here..."></textarea>
+          <button class="primary-btn" id="reviewJsonBtn">Review before adding</button>
+          ${statusMsg ? statusMsg : ""}
+
+          <div class="notes-card" style="margin-top:14px;">
+            <button class="notes-toggle ${addAiHelpOpen ? "open" : ""}" id="aiHelpToggle">
+              <span class="chevron">▸</span><span>Converting a recipe from a photo or link? Get help from an AI assistant</span>
+            </button>
+            ${addAiHelpOpen ? `<div class="notes-body">
+              <p style="font-size:0.85rem;color:var(--muted);margin:0 0 10px;">Copy this prompt into an AI assistant (like Claude) along with a photo or link of the recipe, then paste what it gives you back above.</p>
+              <div class="btn-row"><button class="secondary-btn" id="copyPromptBtn">Copy prompt for AI</button></div>
+              <div class="schema-box" style="margin-top:12px;">
+                <pre>${escapeHtml(JSON.stringify(SCHEMA_EXAMPLE, null, 2))}</pre>
+                <div>Only <code>title</code> and <code>ingredients</code> are required.</div>
+              </div>
+            </div>` : ""}
+          </div>
+        </div>` : ""}
+      </div>
+    `;
+    document.getElementById("addBackBtn").addEventListener("click", () => history.back());
+    document.getElementById("manualAddBtn").addEventListener("click", () => renderRecipeForm(null));
+    document.getElementById("importToggle").addEventListener("click", () => { addImportOpen = !addImportOpen; render(); });
+    if (addImportOpen) {
+      document.getElementById("reviewJsonBtn").addEventListener("click", handleJsonReview);
+      document.getElementById("aiHelpToggle").addEventListener("click", () => { addAiHelpOpen = !addAiHelpOpen; render(); });
+      if (addAiHelpOpen) {
+        document.getElementById("copyPromptBtn").addEventListener("click", copyClaudePrompt);
+      }
+    }
+  }
+  render();
 }
 
 // Checks the ingredient textarea against the item catalog and shows which
@@ -3222,7 +3458,8 @@ function handleFileImport(e) {
         if (parsed.itemCatalog) await saveItemCatalog(parsed.itemCatalog);
         else if (parsed.ingredientCatalog) {
           await saveItemCatalog(parsed.ingredientCatalog.map(e => ({
-            id: e.id, name: e.name, aliases: e.aliases || [], staple: !!e.staple, unit: "", step: 1, defaultQty: 1
+            id: e.id, name: e.name, aliases: e.aliases || [], staple: !!e.staple,
+            tags: e.staple ? ["staple"] : [], unit: "", step: 1, defaultQty: 1
           })));
         }
       }
@@ -3417,6 +3654,7 @@ window.addEventListener("unhandledrejection", (e) => {
     db = await openDB();
     await seedIfEmpty();
     await seedItemCatalogIfEmpty();
+    await migrateStapleTags();
     try {
       const saved = JSON.parse(localStorage.getItem("navStack"));
       if (Array.isArray(saved) && saved.length && saved[0].screen === "home") navStack = saved;
