@@ -1917,21 +1917,7 @@ async function renderShopListArea() {
       qtyInput.addEventListener("keydown", (e) => { if (e.key === "Enter") qtyInput.blur(); });
     }
 
-    const delBtn = el.querySelector('[data-action="delete-item"]');
-    if (delBtn) {
-      delBtn.addEventListener("click", async (e) => {
-        e.stopPropagation();
-        const all = await getShopItems();
-        const item = all.find(i => i.id === id);
-        await saveShopItems(all.filter(i => i.id !== id));
-        showToast(`Removed "${item.name}".`, async () => {
-          const cur = await getShopItems();
-          cur.push(item);
-          await saveShopItems(cur);
-        }, renderShopListArea);
-        renderShopListArea();
-      });
-    }
+    wireSwipeToDelete(el, id);
   });
 
   const selectModeBtn = document.getElementById("selectModeBtn");
@@ -2000,20 +1986,35 @@ function renderShopItem(item, opts) {
       <button class="qty-btn" data-action="qty-inc" title="Increase">+</button>
     </span>` : "";
   return `<div class="shop-item ${item.checked ? "checked" : ""} ${selected ? "selected" : ""}" data-id="${escapeAttr(item.id)}" data-scope="${escapeAttr(opts.scope || "")}">
-    ${leadBox}
-    ${opts.scope && !shopSelectMode ? `<div class="drag-handle" data-action="drag-handle" title="Drag to reorder">⠿</div>` : ""}
-    <div class="item-body">
-      <div class="item-line">
-        <span class="item-text">${escapeHtml(item.name)}</span>
-        ${qtyRow}
+    ${!shopSelectMode ? `<div class="swipe-bg-inner">Delete</div>` : ""}
+    <div class="swipe-content">
+      ${leadBox}
+      ${opts.scope && !shopSelectMode ? `<div class="drag-handle" data-action="drag-handle" title="Drag to reorder">⠿</div>` : ""}
+      <div class="item-body">
+        <div class="item-line">
+          <span class="item-text">${escapeHtml(item.name)}</span>
+          ${qtyRow}
+        </div>
+        ${mealsLabel ? `<div class="item-src">${escapeHtml(mealsLabel)}</div>` : ""}
       </div>
-      ${mealsLabel ? `<div class="item-src">${escapeHtml(mealsLabel)}</div>` : ""}
-    </div>
-    <div class="item-controls">
-      ${item.staple && !opts.hideBadge ? `<span class="icon-btn on" style="pointer-events:none;">Staple</span>` : ""}
-      ${!shopSelectMode ? `<button class="icon-btn" data-action="delete-item" title="Remove item">✕</button>` : ""}
+      <div class="item-controls">
+        ${item.staple && !opts.hideBadge ? `<span class="icon-btn on" style="pointer-events:none;">Staple</span>` : ""}
+      </div>
     </div>
   </div>`;
+}
+
+async function deleteShopItem(id) {
+  const all = await getShopItems();
+  const item = all.find(i => i.id === id);
+  if (!item) return;
+  await saveShopItems(all.filter(i => i.id !== id));
+  showToast(`Removed "${item.name}".`, async () => {
+    const cur = await getShopItems();
+    cur.push(item);
+    await saveShopItems(cur);
+  }, renderShopListArea);
+  renderShopListArea();
 }
 
 function startEditItem(el, id) {
@@ -2024,9 +2025,20 @@ function startEditItem(el, id) {
   input.className = "item-text-input";
   input.value = current;
   textEl.replaceWith(input);
+  // The delete "x" only shows up while editing (otherwise it's swipe-to-
+  // delete or nothing) -- rather than a permanently visible button
+  // competing with the item name for attention.
+  const deleteBtn = document.createElement("button");
+  deleteBtn.type = "button";
+  deleteBtn.className = "icon-btn";
+  deleteBtn.title = "Remove item";
+  deleteBtn.textContent = "✕";
+  input.insertAdjacentElement("afterend", deleteBtn);
   input.focus();
   input.setSelectionRange(current.length, current.length);
+  let deleting = false;
   const save = async () => {
+    if (deleting) return;
     const val = input.value.trim();
     if (!val) { renderShopListArea(); return; }
     const all = await getShopItems();
@@ -2049,6 +2061,68 @@ function startEditItem(el, id) {
   input.addEventListener("blur", save);
   input.addEventListener("keydown", (e) => { if (e.key === "Enter") input.blur(); });
   input.addEventListener("click", (e) => e.stopPropagation());
+  deleteBtn.addEventListener("mousedown", (e) => e.preventDefault()); // don't fire input's blur-save first
+  deleteBtn.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    deleting = true;
+    await deleteShopItem(id);
+  });
+}
+
+// Swipe-left-to-delete: a transform-only preview on the inner
+// .swipe-content (never the outer .shop-item, which the vertical
+// drag-to-reorder also transforms) so the two gestures never fight over
+// the same style.transform. touch-action:pan-y on .swipe-content lets
+// vertical list scrolling stay native; only once a gesture is decided to
+// be horizontal do we take over and prevent the click that would
+// otherwise follow.
+function wireSwipeToDelete(itemEl, id) {
+  const content = itemEl.querySelector(".swipe-content");
+  if (!content) return;
+  let startX = 0, startY = 0, dx = 0, tracking = false, decided = false, horizontal = false;
+  const SWIPE_THRESHOLD = -60;
+  const MAX_SWIPE = -96;
+
+  content.addEventListener("pointerdown", (e) => {
+    if (e.target.closest(".box, .drag-handle, .qty-row, input, button")) return;
+    startX = e.clientX; startY = e.clientY; dx = 0; tracking = true; decided = false; horizontal = false;
+  });
+  content.addEventListener("pointermove", (e) => {
+    if (!tracking) return;
+    const mdx = e.clientX - startX, mdy = e.clientY - startY;
+    if (!decided) {
+      if (Math.abs(mdx) < 8 && Math.abs(mdy) < 8) return;
+      decided = true;
+      horizontal = Math.abs(mdx) > Math.abs(mdy);
+      if (horizontal) { try { content.setPointerCapture(e.pointerId); } catch (err) { /* best-effort */ } }
+    }
+    if (!horizontal) return;
+    dx = Math.max(mdx, MAX_SWIPE);
+    if (dx > 0) dx = 0;
+    content.style.transform = `translateX(${dx}px)`;
+    itemEl.classList.toggle("swipe-armed", dx <= SWIPE_THRESHOLD);
+  });
+  const end = (e) => {
+    if (!tracking) return;
+    tracking = false;
+    if (horizontal) {
+      const cancelClick = (ev) => { ev.stopPropagation(); ev.preventDefault(); };
+      content.addEventListener("click", cancelClick, { capture: true, once: true });
+      setTimeout(() => content.removeEventListener("click", cancelClick, { capture: true }), 0);
+    }
+    if (horizontal && dx <= SWIPE_THRESHOLD) {
+      content.style.transition = "transform 0.15s ease";
+      content.style.transform = "translateX(-100%)";
+      setTimeout(() => deleteShopItem(id), 140);
+    } else if (horizontal) {
+      content.style.transition = "transform 0.15s ease";
+      content.style.transform = "";
+      itemEl.classList.remove("swipe-armed");
+      setTimeout(() => { content.style.transition = ""; }, 200);
+    }
+  };
+  content.addEventListener("pointerup", end);
+  content.addEventListener("pointercancel", end);
 }
 
 /* ---------- Item catalog (its own screen, reached from Shopping List) ---------- */
@@ -2733,8 +2807,18 @@ function escapeAttr(str) { return escapeHtml(str); }
 
 /* ---------- Tabs ---------- */
 
-function setTab(tab) {
+// Tab switches push a history entry (skipped when we're the one responding
+// to a popstate) so the browser/PWA back button steps back through
+// recently visited tabs instead of immediately closing the app. The last
+// tab is also remembered in localStorage so a refresh reopens where you
+// left off instead of always landing on Recipes.
+function setTab(tab, opts) {
+  opts = opts || {};
   currentTab = tab;
+  try { localStorage.setItem("lastTab", tab); } catch (err) { /* private-mode storage limits -- non-fatal */ }
+  if (!opts.skipHistory && (!history.state || history.state.tab !== tab)) {
+    history.pushState({ tab }, "", "#" + tab);
+  }
   document.getElementById("tabRecipesBtn").classList.toggle("active", tab === "recipes");
   document.getElementById("tabPlanBtn").classList.toggle("active", tab === "mealplan");
   document.getElementById("tabShopBtn").classList.toggle("active", tab === "shop");
@@ -2749,6 +2833,10 @@ document.getElementById("tabRecipesBtn").addEventListener("click", () => setTab(
 document.getElementById("tabPlanBtn").addEventListener("click", () => setTab("mealplan"));
 document.getElementById("tabShopBtn").addEventListener("click", () => setTab("shop"));
 document.getElementById("tabSettingsBtn").addEventListener("click", () => setTab("settings"));
+window.addEventListener("popstate", (e) => {
+  const tab = (e.state && e.state.tab) || "recipes";
+  setTab(tab, { skipHistory: true });
+});
 document.getElementById("undoToastBtn").addEventListener("click", async () => {
   const undoFn = toastUndoFn;
   const refreshFn = toastRefreshFn;
@@ -2772,7 +2860,10 @@ window.addEventListener("unhandledrejection", (e) => {
     db = await openDB();
     await seedIfEmpty();
     await seedItemCatalogIfEmpty();
-    setTab("recipes");
+    let initialTab = "recipes";
+    try { initialTab = localStorage.getItem("lastTab") || "recipes"; } catch (err) { /* private-mode storage limits -- non-fatal */ }
+    history.replaceState({ tab: initialTab }, "", "#" + initialTab);
+    setTab(initialTab, { skipHistory: true });
   } catch (err) {
     console.error("Failed to start Rustle Up:", err);
     document.getElementById("main").innerHTML = `
