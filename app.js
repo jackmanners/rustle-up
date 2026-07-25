@@ -1213,6 +1213,26 @@ function ingredientTermScore(term, ingredientName) {
   return 0;
 }
 
+// Scores a shelf entry against a typed query -- the best of its name and
+// any alias, so searching "capsicum" surfaces "Bell pepper" (aliased) just
+// as readily as searching its own name would. Used for the recipe form's
+// "link to existing" search, so it behaves like actual search instead of
+// scrolling a plain alphabetical list.
+function catalogEntrySearchScore(query, entry) {
+  let best = ingredientTermScore(query, entry.name);
+  (entry.aliases || []).forEach(a => { best = Math.max(best, ingredientTermScore(query, a)); });
+  return best;
+}
+function computeCatalogSearchSuggestions(query, catalog, limit) {
+  const q = query.trim();
+  if (!q) return [];
+  return catalog.map(e => ({ entry: e, score: catalogEntrySearchScore(q, e) }))
+    .filter(x => x.score > 0)
+    .sort((a, b) => b.score - a.score || a.entry.name.localeCompare(b.entry.name))
+    .slice(0, limit || 6)
+    .map(x => x.entry);
+}
+
 // Every distinct ingredient name that actually appears in some recipe
 // (post-parsing, so "2 onions" and "onions" collapse together) -- the
 // candidate pool for ingredient suggestions, so nothing suggested is a
@@ -1755,7 +1775,7 @@ async function renderDetail(id, opts) {
         <label for="scaleServes">Scale to serves</label>
         <input type="number" min="1" id="scaleServes" value="${baseServes}">
       </div>` : ""}
-      <ul class="ing-list" id="ingList">${(r.ingredients || []).map(i => `<li>${escapeHtml(i)}</li>`).join("")}</ul>
+      <ul class="ing-list" id="ingList">${(r.ingredients || []).map((i, idx) => `<li data-idx="${idx}" title="Tap to open on your shelf">${escapeHtml(i)}</li>`).join("")}</ul>
 
       <div class="section-label">Method</div>
       <ol class="method-list">${(r.method || []).map(m => `<li>${escapeHtml(m)}</li>`).join("")}</ol>
@@ -1802,9 +1822,27 @@ async function renderDetail(id, opts) {
       const target = Number(scaleInput.value);
       const factor = target > 0 ? target / baseServes : 1;
       document.getElementById("ingList").innerHTML =
-        (r.ingredients || []).map(i => `<li>${escapeHtml(scaleIngredientLine(i, factor))}</li>`).join("");
+        (r.ingredients || []).map((i, idx) => `<li data-idx="${idx}" title="Tap to open on your shelf">${escapeHtml(scaleIngredientLine(i, factor))}</li>`).join("");
     });
   }
+  document.getElementById("ingList").addEventListener("click", async (e) => {
+    const li = e.target.closest("li[data-idx]");
+    if (!li) return;
+    const rawLine = (r.ingredients || [])[Number(li.dataset.idx)];
+    if (rawLine === undefined) return;
+    await openOrCreateItemForIngredientLine(rawLine);
+  });
+}
+
+// Tapping an ingredient in the recipe detail jumps straight to its shelf
+// entry -- if it's not matched yet, this creates one first (same
+// match/create logic as adding to the shopping list), so there's always
+// somewhere to land rather than a dead tap.
+async function openOrCreateItemForIngredientLine(rawLine) {
+  const name = parseIngredient(rawLine).name || rawLine;
+  const { entry, suggestion } = await ensureCatalogEntryForName(name);
+  if (suggestion) offerAliasMerge(entry, suggestion, null);
+  showItemDetailsPopover(entry.id);
 }
 
 /* ---------- Meal plan ---------- */
@@ -2809,21 +2847,24 @@ function itemDetailsFieldsHtml(entry) {
   `;
 }
 
+// Compact, shopping-list-style row: name + read-only badges, no inline
+// inputs -- tapping the row opens the full editor (showItemDetailsPopover)
+// instead of editing in place, so drag-to-reorder isn't fighting an
+// always-open text field and the shelf reads at a glance like the list does.
 function renderItemCatalogRow(entry) {
+  const tags = (entry.tags || []).filter(t => t !== STAPLE_TAG);
+  const badges = [
+    entry.staple ? `<span class="tag shelf-badge-staple">Staple</span>` : "",
+    entry.defaultItem ? `<span class="tag shelf-badge-default">Auto-add</span>` : "",
+  ].concat(tags.map(t => `<span class="tag">${escapeHtml(t)}</span>`)).filter(Boolean).join("");
   return `
     <div class="shelf-item" data-id="${escapeAttr(entry.id)}" style="border-left-color:${swatchColorForTitle(entry.name)};">
-      <div class="shelf-item-main">
-        <div class="drag-handle" data-action="drag-handle" title="Drag to reorder">⠿</div>
-        <div class="shelf-item-body">
-          <input type="text" class="ing-name shelf-name-input" value="${escapeAttr(entry.name)}">
-          ${itemTagChipsHtml(entry)}
-          <div class="shelf-item-details hidden" data-details>
-            ${itemDetailsFieldsHtml(entry)}
-          </div>
-        </div>
-        <button type="button" class="icon-btn shelf-details-btn" data-action="toggle-details" title="More options">⋯</button>
-        <button class="icon-btn" data-action="delete-ing" title="Delete">✕</button>
+      <div class="drag-handle" data-action="drag-handle" title="Drag to reorder">⠿</div>
+      <div class="shelf-item-row-body" data-action="open-item">
+        <div class="shelf-item-name">${escapeHtml(entry.name)}</div>
+        ${badges ? `<div class="tag-row shelf-item-badges">${badges}</div>` : ""}
       </div>
+      <button class="icon-btn" data-action="delete-ing" title="Delete">✕</button>
     </div>`;
 }
 
@@ -2897,6 +2938,7 @@ async function showItemDetailsPopover(catalogId) {
       if (changed) await saveShopItems(items);
     }
     if (document.getElementById("shopListArea")) renderShopListArea();
+    if (document.getElementById("ingCatalogArea")) renderItemCatalogRows();
   };
   overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
 
@@ -2979,51 +3021,8 @@ function wireItemCatalogEvents() {
   const main = document.getElementById("main");
   main.querySelectorAll(".shelf-item[data-id]").forEach(row => {
     const id = row.dataset.id;
-    const save = () => saveItemFieldsFromRoot(row, id);
-    row.querySelector(".ing-name").addEventListener("blur", save);
-    row.querySelector(".ing-step").addEventListener("blur", save);
-    row.querySelector(".ing-defaultqty").addEventListener("blur", save);
-    row.querySelector(".ing-aliases").addEventListener("blur", save);
-    row.querySelector(".ing-anti-aliases").addEventListener("blur", save);
-    row.querySelector(".ing-notes").addEventListener("blur", save);
-    row.querySelector(".ing-unit").addEventListener("blur", save);
 
-    row.querySelector('[data-action="toggle-staple"]').addEventListener("click", async () => {
-      const catalog = await getItemCatalog();
-      const entry = catalog.find(e => e.id === id);
-      if (!entry) return;
-      entry.tags = entry.tags || [];
-      if (entry.tags.includes(STAPLE_TAG)) entry.tags = entry.tags.filter(t => t !== STAPLE_TAG);
-      else entry.tags.push(STAPLE_TAG);
-      syncStapleFromTags(entry);
-      await saveItemCatalog(catalog);
-      renderItemCatalogRows();
-    });
-    row.querySelector('[data-action="toggle-default"]').addEventListener("click", async () => {
-      const catalog = await getItemCatalog();
-      const entry = catalog.find(e => e.id === id);
-      if (!entry) return;
-      entry.defaultItem = !entry.defaultItem;
-      await saveItemCatalog(catalog);
-      renderItemCatalogRows();
-    });
-    row.querySelectorAll(".item-tag-chip").forEach(chip => {
-      chip.addEventListener("click", async () => {
-        const catalog = await getItemCatalog();
-        const entry = catalog.find(e => e.id === id);
-        if (!entry) return;
-        entry.tags = (entry.tags || []).filter(t => t !== chip.dataset.tag);
-        syncStapleFromTags(entry);
-        await saveItemCatalog(catalog);
-        renderItemCatalogRows();
-      });
-    });
-    const addTagBtn = row.querySelector('[data-action="add-tag"]');
-    if (addTagBtn) addTagBtn.addEventListener("click", () => startAddItemTag(row, id));
-
-    row.querySelector('[data-action="toggle-details"]').addEventListener("click", () => {
-      row.querySelector("[data-details]").classList.toggle("hidden");
-    });
+    row.querySelector('[data-action="open-item"]').addEventListener("click", () => showItemDetailsPopover(id));
 
     row.querySelector('[data-action="delete-ing"]').addEventListener("click", async () => {
       const catalog = await getItemCatalog();
@@ -3354,7 +3353,15 @@ function detectDefaultServes(item) {
   return null;
 }
 
-function buildClaudePrompt() {
+// Given free rein, an LLM tends to invent a long, overly-specific tag list
+// per recipe -- which fragments the tag vocabulary and makes filtering by
+// tag less useful over time. Capping the count and handing over the tags
+// already in use (so it reuses "chicken" instead of coining "poultry-dish")
+// keeps the vocabulary small and actually useful for filtering.
+function buildClaudePrompt(existingTags) {
+  const tagGuidance = existingTags && existingTags.length
+    ? `Tags already in use across my recipes: ${existingTags.join(", ")}. Reuse these where they fit -- only add a new tag if none of these apply.`
+    : "";
   return `Please read the recipe in the link or photo I'm about to share, and return it as a single JSON object (or a JSON array if there's more than one recipe) using exactly this schema -- no extra commentary, just the JSON:
 
 ${JSON.stringify(SCHEMA_EXAMPLE, null, 2)}
@@ -3363,12 +3370,14 @@ Notes:
 - ingredients and method should each be an array of strings, one item/step per entry.
 - serves should be a plain number if you can tell how many it serves.
 - sourceUrl is optional -- include it only if the recipe came from a link.
-- Only title and ingredients are strictly required; leave other fields blank/empty if unknown.`;
+- Only title and ingredients are strictly required; leave other fields blank/empty if unknown.
+- tags: at most 3-4, and only the ones that actually help filtering later (main ingredient, cuisine, or meal type -- not every attribute of the dish). ${tagGuidance}`;
 }
 
 async function copyClaudePrompt() {
   try {
-    await navigator.clipboard.writeText(buildClaudePrompt());
+    const recipes = await getAllRecipes();
+    await navigator.clipboard.writeText(buildClaudePrompt(allTags(recipes)));
     showToast("Copied! Paste into Claude with a link or photo.", null, null);
   } catch (e) {
     showToast("Couldn't copy automatically -- try again.", null, null);
@@ -3461,36 +3470,49 @@ async function renderUnmatchedHint() {
     }
   });
   if (unmatched.length === 0) { hintEl.innerHTML = ""; return; }
-  const catalogOptions = catalog.slice().sort((a, b) => a.name.localeCompare(b.name))
-    .map(e => `<option value="${escapeAttr(e.id)}">${escapeHtml(e.name)}</option>`).join("");
   hintEl.innerHTML = `<div class="status-msg" style="margin:-6px 0 14px;">
     <div style="margin-bottom:8px;">${unmatched.length} ingredient(s) not yet on your shelf:</div>
     ${unmatched.map((n, i) => `
       <div class="unmatched-row" data-idx="${i}">
         <span class="unmatched-name">${escapeHtml(n)}</span>
-        <select class="unmatched-link" data-idx="${i}">
-          <option value="">Link to existing...</option>
-          ${catalogOptions}
-        </select>
+        <div class="unmatched-link-wrap">
+          <input type="text" class="unmatched-link-input" data-idx="${i}" placeholder="Link to existing..." autocomplete="off">
+          <div class="rustle-suggestions hidden unmatched-link-suggestions" data-idx="${i}"></div>
+        </div>
       </div>`).join("")}
     <button class="mini-btn" id="addUnmatchedBtn" type="button" style="margin-top:8px;">Add remaining as new items</button>
   </div>`;
-  hintEl.querySelectorAll(".unmatched-link").forEach(sel => {
-    sel.addEventListener("change", async () => {
-      const entryId = sel.value;
-      if (!entryId) return;
-      const name = unmatched[Number(sel.dataset.idx)];
-      const cat = await getItemCatalog();
-      const entry = cat.find(e => e.id === entryId);
-      if (entry) {
-        entry.aliases = entry.aliases || [];
-        const norm = name.toLowerCase();
-        if (!entry.aliases.includes(norm)) entry.aliases.push(norm);
-        await saveItemCatalog(cat);
-        showToast(`Linked "${name}" to "${entry.name}".`, null, null);
-      }
-      renderUnmatchedHint();
-    });
+
+  const commitLink = async (name, entry) => {
+    const cat = await getItemCatalog();
+    const target = cat.find(e => e.id === entry.id);
+    if (target) {
+      target.aliases = target.aliases || [];
+      const norm = name.toLowerCase();
+      if (!target.aliases.includes(norm)) target.aliases.push(norm);
+      await saveItemCatalog(cat);
+      showToast(`Linked "${name}" to "${target.name}".`, null, null);
+    }
+    renderUnmatchedHint();
+  };
+  hintEl.querySelectorAll(".unmatched-link-input").forEach(input => {
+    const idx = Number(input.dataset.idx);
+    const name = unmatched[idx];
+    const dropdown = hintEl.querySelector(`.unmatched-link-suggestions[data-idx="${idx}"]`);
+    let current = [];
+    const renderList = () => {
+      current = computeCatalogSearchSuggestions(input.value, catalog, 6);
+      if (current.length === 0) { dropdown.classList.add("hidden"); dropdown.innerHTML = ""; return; }
+      dropdown.classList.remove("hidden");
+      dropdown.innerHTML = current.map((e, i) => `<button type="button" class="rustle-suggestion-item" data-i="${i}">${escapeHtml(e.name)}</button>`).join("");
+      dropdown.querySelectorAll("button").forEach(btn => {
+        btn.addEventListener("mousedown", (e) => e.preventDefault()); // survive the input's blur
+        btn.addEventListener("click", () => commitLink(name, current[Number(btn.dataset.i)]));
+      });
+    };
+    input.addEventListener("input", renderList);
+    input.addEventListener("focus", renderList);
+    input.addEventListener("blur", () => setTimeout(() => { dropdown.classList.add("hidden"); dropdown.innerHTML = ""; }, 150));
   });
   document.getElementById("addUnmatchedBtn").addEventListener("click", async () => {
     const cat = await getItemCatalog();
@@ -3506,13 +3528,14 @@ async function renderUnmatchedHint() {
   });
 }
 
-function renderRecipeForm(recipe, opts) {
+async function renderRecipeForm(recipe, opts) {
   opts = opts || {};
   const main = document.getElementById("main");
   const isEdit = !!recipe;
   if (!opts.skipHistory) pushNav("form", "recipes", { id: isEdit ? recipe.id : null });
   const r = recipe || { title: "", source: "", sourceUrl: "", tags: [], serves: null, servesLabel: "", time: "", ingredients: [], method: [], notes: "" };
   const defaultServes = r.serves || detectDefaultServes(r) || 4;
+  const existingTags = allTags(await getAllRecipes()).filter(t => !(r.tags || []).includes(t));
 
   main.innerHTML = `
     <button class="back-btn" id="formBackBtn">&larr; ${isEdit ? "Back to recipe" : "Back"}</button>
@@ -3541,7 +3564,13 @@ function renderRecipeForm(recipe, opts) {
         <label>Card color</label>
         <div class="card-color-row" id="cardColorRow">${cardColorSwatchesHtml(r.cardColor || null)}</div>
       </div>
-      <div class="form-field"><label>Tags (comma separated)</label><input type="text" id="fTags" value="${escapeAttr((r.tags || []).join(", "))}"></div>
+      <div class="form-field">
+        <label>Tags (comma separated)</label>
+        <div class="rustle-input-wrap">
+          <input type="text" id="fTags" value="${escapeAttr((r.tags || []).join(", "))}" autocomplete="off">
+          <div class="rustle-suggestions hidden" id="fTagsSuggestions"></div>
+        </div>
+      </div>
       <div class="form-field"><label>Ingredients (one per line)</label><textarea id="fIngredients">${escapeHtml((r.ingredients || []).join("\n"))}</textarea></div>
       <div id="unmatchedHint"></div>
       <div class="form-field"><label>Method (one step per line)</label><textarea id="fMethod">${escapeHtml((r.method || []).join("\n"))}</textarea></div>
@@ -3601,6 +3630,42 @@ function renderRecipeForm(recipe, opts) {
     });
   }
   wireCardColorRow();
+
+  // Autocompletes against tags already used elsewhere in the library, so
+  // typing "chick" can complete to an existing "chicken" instead of
+  // silently coining a near-duplicate tag -- suggests against whatever's
+  // typed after the last comma, and completes just that segment.
+  const fTagsInput = document.getElementById("fTags");
+  const fTagsSuggestions = document.getElementById("fTagsSuggestions");
+  const currentTagFragment = () => {
+    const parts = fTagsInput.value.split(",");
+    return parts[parts.length - 1].trim();
+  };
+  const hideTagSuggestions = () => { fTagsSuggestions.classList.add("hidden"); fTagsSuggestions.innerHTML = ""; };
+  const renderTagSuggestions = () => {
+    const frag = currentTagFragment().toLowerCase();
+    if (!frag) { hideTagSuggestions(); return; }
+    const already = new Set(fTagsInput.value.split(",").map(s => s.trim().toLowerCase()).filter(Boolean));
+    const matches = existingTags.filter(t => t.toLowerCase().includes(frag) && !already.has(t.toLowerCase())).slice(0, 6);
+    if (matches.length === 0) { hideTagSuggestions(); return; }
+    fTagsSuggestions.classList.remove("hidden");
+    fTagsSuggestions.innerHTML = matches.map((t, i) => `<button type="button" class="rustle-suggestion-item" data-i="${i}">${escapeHtml(t)}</button>`).join("");
+    fTagsSuggestions.querySelectorAll("button").forEach(btn => {
+      btn.addEventListener("mousedown", (e) => e.preventDefault());
+      btn.addEventListener("click", () => {
+        const picked = matches[Number(btn.dataset.i)];
+        const parts = fTagsInput.value.split(",");
+        parts[parts.length - 1] = " " + picked;
+        fTagsInput.value = parts.map(p => p.trim()).filter(Boolean).join(", ") + ", ";
+        hideTagSuggestions();
+        fTagsInput.focus();
+      });
+    });
+  };
+  fTagsInput.addEventListener("input", renderTagSuggestions);
+  fTagsInput.addEventListener("focus", renderTagSuggestions);
+  fTagsInput.addEventListener("blur", () => setTimeout(hideTagSuggestions, 150));
+
   const ingredientsField = document.getElementById("fIngredients");
   let unmatchedDebounce = null;
   ingredientsField.addEventListener("input", () => {

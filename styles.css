@@ -349,6 +349,8 @@ main.home-screen > .btn-row {
 }
 .ing-list, .method-list { margin: 0; padding-left: 20px; }
 .ing-list li, .method-list li { margin-bottom: 6px; line-height: 1.4; }
+.ing-list li { cursor: pointer; border-radius: 4px; transition: background 0.12s ease; }
+.ing-list li:active { background: var(--leaf-bg); }
 .notes-box { background: var(--leaf-bg); border-radius: 10px; padding: 10px 14px; font-size: 0.88rem; margin-top: 8px; }
 
 /* Add recipe / forms */
@@ -374,9 +376,14 @@ textarea {
 .form-field { margin-bottom: 12px; }
 .form-field label { display:block; font-size:0.76rem; font-weight:600; color:var(--muted); margin-bottom:4px; }
 .field-hint { font-size: 0.74rem; color: var(--muted); margin: 4px 2px 0; line-height: 1.35; }
-.unmatched-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 5px 0; }
+.unmatched-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 5px 0; flex-wrap: wrap; }
 .unmatched-name { font-size: 0.85rem; }
-.unmatched-link { font-size: 0.78rem; padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); color: var(--ink); max-width: 160px; }
+.unmatched-link-wrap { position: relative; width: 170px; }
+.unmatched-link-input {
+  width: 100%; font-size: 0.78rem; padding: 5px 8px; border: 1px solid var(--line);
+  border-radius: 6px; background: var(--card); color: var(--ink);
+}
+.unmatched-link-suggestions { max-height: 180px; }
 .form-field input[type="text"], .form-field input[type="url"], .form-field input[type="number"] {
   width:100%; padding:9px 12px; border:1px solid var(--line); border-radius:8px;
   font-size:0.9rem; background:var(--card); color:var(--ink);
@@ -534,7 +541,8 @@ input[type="file"] { display: none; }
    long shelf is easier to visually scan/browse rather than just read.
 */
 .shelf-item {
-  padding: 12px 14px; margin-bottom: 8px; background: var(--card);
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 12px; margin-bottom: 6px; background: var(--card);
   border: 1px solid var(--line); border-left-width: 4px; border-radius: 10px;
   box-shadow: 0 1px 2px var(--shadow-soft);
 }
@@ -542,7 +550,15 @@ input[type="file"] { display: none; }
 .shelf-item:not(.dragging) { transition: transform 0.12s ease; }
 .shelf-new-item { border-style: dashed; border-left-width: 1px; box-shadow: none; }
 .shelf-item-main { display: flex; align-items: flex-start; gap: 8px; }
-.shelf-item-body { flex: 1; min-width: 0; }
+/* Compact row -- name + read-only badges, tap anywhere on the body to open
+   the full editor rather than editing inline (matches the shopping list's
+   at-a-glance density, and keeps drag-to-reorder from fighting an
+   always-open text input). */
+.shelf-item-row-body { flex: 1; min-width: 0; cursor: pointer; }
+.shelf-item-name { font-family: var(--font-heading); font-size: 0.95rem; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.shelf-item-badges { margin-top: 4px; row-gap: 4px; }
+.tag.shelf-badge-staple { background: var(--staple-bg); color: var(--staple); }
+.tag.shelf-badge-default { background: var(--leaf-bg); color: var(--leaf-dark); }
 .shelf-name-input {
   width: 100%; border: none; border-bottom: 1px solid transparent; background: transparent;
   font-family: var(--font-heading); font-size: 1rem; font-weight: 600;
@@ -562,12 +578,10 @@ input[type="file"] { display: none; }
   font-size: 0.66rem; font-weight: 600; padding: 2px 8px; border-radius: 99px;
 }
 .item-tag-input { border-style: solid; width: 80px; cursor: text; }
-.shelf-details-btn { font-weight: 700; letter-spacing: 1px; }
-/* Compact: tighter field spacing/sizing than the recipe form's fields,
-   since a shelf row's disclosure is meant to be a quick peek, not a
-   full-page form. */
-.shelf-item-details { margin: 10px 0 2px 26px; }
-.shelf-item-details.hidden { display: none; }
+/* Compact: tighter field spacing/sizing than the recipe form's fields --
+   this only appears inside the item details popover now, which is meant
+   to be a quick peek, not a full-page form. */
+.shelf-item-details { margin: 0; }
 .shelf-item-details .form-field { margin-bottom: 8px; }
 .shelf-item-details .form-field label { margin-bottom: 2px; }
 .shelf-item-details input[type="text"], .shelf-item-details input[type="number"] {
