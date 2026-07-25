@@ -1581,12 +1581,29 @@ function sourceLineHtml(r) {
 
 // A small fixed palette so a recipe without a photo still gets a distinct,
 // recognizable color band on its card (same title always maps to the same
-// color) instead of every card looking identical.
-const CARD_SWATCH_COLORS = ["#4a7c59", "#c1652f", "#b8863b", "#5b84a6", "#96608f"];
+// color) instead of every card looking identical -- unless the recipe has
+// an explicit cardColor set (from the edit form), which always wins.
+const CARD_SWATCH_COLORS = ["#4a7c59", "#c1652f", "#b8863b", "#5b84a6", "#96608f", "#b5533f", "#3d8a86", "#6b6b63"];
 function swatchColorForTitle(title) {
   let hash = 0;
   for (let i = 0; i < title.length; i++) hash = (hash * 31 + title.charCodeAt(i)) >>> 0;
   return CARD_SWATCH_COLORS[hash % CARD_SWATCH_COLORS.length];
+}
+function swatchColorForRecipe(recipe) {
+  return recipe.cardColor || swatchColorForTitle(recipe.title || "");
+}
+// Preset dots + "Auto" + a native color picker for picking a recipe's
+// card color by hand. Only affects the swatch band shown when there's no
+// photo -- a photo always takes visual precedence over a color.
+function cardColorSwatchesHtml(selected) {
+  const isPreset = selected && CARD_SWATCH_COLORS.includes(selected);
+  const isCustom = selected && !isPreset;
+  let html = `<button type="button" class="card-color-swatch auto-swatch ${!selected ? "selected" : ""}" data-color="" title="Auto (from title)">Auto</button>`;
+  html += CARD_SWATCH_COLORS.map(c =>
+    `<button type="button" class="card-color-swatch ${selected === c ? "selected" : ""}" data-color="${c}" style="background:${c};" title="${c}"></button>`
+  ).join("");
+  html += `<input type="color" id="cardColorPicker" class="card-color-picker ${isCustom ? "selected" : ""}" value="${selected || swatchColorForTitle("")}" title="Custom color">`;
+  return html;
 }
 // Photo cards render collapsed to a compact strip by default (see
 // cardImagesExpanded), with a small per-card button to expand just that
@@ -1601,7 +1618,7 @@ function recipeCardMediaHtml(recipe) {
       <button type="button" class="media-expand-btn" data-action="toggle-card-image" title="${expanded ? "Collapse image" : "Expand image"}">${ICON_CHEVRON_DOWN}</button>
     </div>`;
   }
-  return `<div class="recipe-card-media recipe-card-swatch" style="background:${swatchColorForTitle(recipe.title || "")};"></div>`;
+  return `<div class="recipe-card-media recipe-card-swatch" style="background:${swatchColorForRecipe(recipe)};"></div>`;
 }
 function wireCardMediaToggles(container) {
   container.querySelectorAll('[data-action="toggle-card-image"]').forEach(btn => {
@@ -3183,6 +3200,10 @@ function renderRecipeForm(recipe, opts) {
         </div>
         <input type="file" id="fPhotoInput" accept="image/*">
       </div>
+      <div class="form-field">
+        <label>Card color</label>
+        <div class="card-color-row" id="cardColorRow">${cardColorSwatchesHtml(r.cardColor || null)}</div>
+      </div>
       <div class="form-field"><label>Tags (comma separated)</label><input type="text" id="fTags" value="${escapeAttr((r.tags || []).join(", "))}"></div>
       <div class="form-field"><label>Ingredients (one per line)</label><textarea id="fIngredients">${escapeHtml((r.ingredients || []).join("\n"))}</textarea></div>
       <div id="unmatchedHint"></div>
@@ -3226,6 +3247,23 @@ function renderRecipeForm(recipe, opts) {
     }
     e.target.value = "";
   });
+  let formCardColor = r.cardColor || null;
+  function wireCardColorRow() {
+    const row = document.getElementById("cardColorRow");
+    row.querySelectorAll(".card-color-swatch").forEach(btn => {
+      btn.addEventListener("click", () => {
+        formCardColor = btn.dataset.color || null;
+        row.innerHTML = cardColorSwatchesHtml(formCardColor);
+        wireCardColorRow();
+      });
+    });
+    row.querySelector(".card-color-picker").addEventListener("input", (e) => {
+      formCardColor = e.target.value;
+      row.querySelectorAll(".card-color-swatch").forEach(b => b.classList.remove("selected"));
+      e.target.classList.add("selected");
+    });
+  }
+  wireCardColorRow();
   const ingredientsField = document.getElementById("fIngredients");
   let unmatchedDebounce = null;
   ingredientsField.addEventListener("input", () => {
@@ -3254,7 +3292,7 @@ function renderRecipeForm(recipe, opts) {
     const savedRecipe = {
       id: isEdit ? r.id : slugify(title) + "-" + Date.now().toString(36).slice(-4),
       title, source, sourceUrl, tags, serves, servesLabel, time, ingredients, method, notes,
-      rating: formRating, timesCooked: r.timesCooked || 0, lastCooked: r.lastCooked || null, photo: formPhoto,
+      rating: formRating, timesCooked: r.timesCooked || 0, lastCooked: r.lastCooked || null, photo: formPhoto, cardColor: formCardColor,
       dateAdded: r.dateAdded || new Date().toISOString().slice(0, 10)
     };
     await putRecipe(savedRecipe);
@@ -3343,7 +3381,7 @@ async function handleConfirmImport() {
       method: item.method || [],
       notes: item.notes || "",
       rating: item.rating || 0, timesCooked: item.timesCooked || 0, lastCooked: item.lastCooked || null,
-      photo: item.photo || null,
+      photo: item.photo || null, cardColor: item.cardColor || null,
       dateAdded: item.dateAdded || new Date().toISOString().slice(0, 10)
     };
     await putRecipe(recipe);
@@ -3511,7 +3549,7 @@ function handleFileImport(e) {
           method: item.method || [],
           notes: item.notes || "",
           rating: item.rating || 0, timesCooked: item.timesCooked || 0, lastCooked: item.lastCooked || null,
-          photo: item.photo || null,
+          photo: item.photo || null, cardColor: item.cardColor || null,
           dateAdded: item.dateAdded || new Date().toISOString().slice(0, 10)
         };
         await putRecipe(recipe);

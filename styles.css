@@ -286,6 +286,24 @@ main.home-screen > .btn-row {
   display: block; width: 100%; max-height: 220px; object-fit: cover;
   border-radius: 10px; margin-bottom: 8px;
 }
+.card-color-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.card-color-swatch {
+  width: 30px; height: 30px; border-radius: 50%; border: 2px solid transparent;
+  padding: 0; box-shadow: inset 0 0 0 1px var(--shadow); cursor: pointer;
+}
+.card-color-swatch.selected { border-color: var(--ink); }
+.auto-swatch {
+  background: var(--cream); color: var(--muted); font-size: 0.55rem; font-weight: 700;
+  display: flex; align-items: center; justify-content: center; text-transform: uppercase;
+}
+.card-color-picker {
+  width: 30px; height: 30px; border-radius: 50%; border: 2px solid transparent;
+  padding: 0; cursor: pointer; overflow: hidden;
+}
+.card-color-picker.selected { border-color: var(--ink); }
+.card-color-picker::-webkit-color-swatch-wrapper { padding: 0; }
+.card-color-picker::-webkit-color-swatch { border: none; border-radius: 50%; }
+.card-color-picker::-moz-color-swatch { border: none; border-radius: 50%; }
 .detail-card h2 { margin: 0 0 4px; font-family: var(--font-heading); font-size: 1.4rem; letter-spacing: -0.01em; }
 .add-hero { text-align: center; padding: 28px 20px; }
 .add-hero p { color: var(--muted); font-size: 0.9rem; margin: 6px 0 18px; }
