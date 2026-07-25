@@ -1,4 +1,4 @@
-# Rustle Up
+# rustleUp
 
 A private, offline-first recipe box and shopping list. Everything lives in
 your browser's IndexedDB — there's no backend, no account, and no data ever
@@ -24,7 +24,7 @@ leaves your device except when you choose to export it.
    you're on a paid GitHub plan with Pages access control. Since there's no
    API key or personal data baked into the site itself (recipes only exist in
    *your* browser's IndexedDB), this is low-risk — someone who found the URL
-   would see an empty Rustle Up with no recipes, not your data. If you'd
+   would see an empty rustleUp with no recipes, not your data. If you'd
    rather it not be discoverable at all, keep the URL to yourselves and don't
    link it anywhere public.
 
@@ -33,7 +33,7 @@ leaves your device except when you choose to export it.
 Once it's live (or even running locally), open the URL on your phone:
 - **iOS Safari:** Share → Add to Home Screen
 - **Android Chrome:** menu → Install app / Add to Home Screen
-- **Desktop Chrome/Edge:** address bar install icon, or menu → Install Rustle Up
+- **Desktop Chrome/Edge:** address bar install icon, or menu → Install rustleUp
 
 After install, it works fully offline — the recipes and shopping list are
 already local, and the service worker caches the app shell itself.
@@ -41,7 +41,7 @@ already local, and the service worker caches the app shell itself.
 ## Adding new recipes
 
 1. Photograph or paste the recipe into a normal Claude chat.
-2. Ask Claude to return it in the Rustle Up schema (shown in the app's Add
+2. Ask Claude to return it in the rustleUp schema (shown in the app's Add
    tab, and below).
 3. Paste the JSON it gives you into the **Add** tab in the app.
 

@@ -111,6 +111,7 @@ h1 {
   display: flex; align-items: center; gap: 8px;
 }
 h1 svg { flex-shrink: 0; }
+.app-logo-icon { flex-shrink: 0; display: block; border-radius: 8px; }
 .header-icon-btn {
   flex-shrink: 0; border: none; background: transparent; color: var(--muted);
   padding: 6px; border-radius: 10px; display: flex; transition: background 0.15s ease, color 0.15s ease;

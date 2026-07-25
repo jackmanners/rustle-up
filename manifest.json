@@ -1,6 +1,6 @@
 {
-  "name": "Rustle Up",
-  "short_name": "Rustle Up",
+  "name": "rustleUp",
+  "short_name": "rustleUp",
   "description": "A private recipe box and shopping list — everything stored on your device.",
   "start_url": "./index.html",
   "scope": "./",

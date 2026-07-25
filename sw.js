@@ -1,4 +1,4 @@
-const CACHE_NAME = "rustle-up-v36";
+const CACHE_NAME = "rustle-up-v37";
 // Code files use network-first below so edits show up immediately without
 // bumping this version; it still matters for the app-shell files (HTML,
 // manifest, icons) and as the offline fallback for the code files too.
