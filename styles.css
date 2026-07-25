@@ -1,24 +1,63 @@
 :root {
-  --ink: #2b2b26;
+  --ink: #2b2622;
   --leaf: #4a7c59;
   --leaf-dark: #365e42;
   --leaf-bg: #eef2ea;
-  --cream: #faf8f2;
-  --card: #ffffff;
-  --line: #e4dfd2;
+  --cream: #faf5ec;
+  --card: #fffdf9;
+  --line: #e6ddc9;
   --muted: #8c8778;
   --staple: #b8863b;
   --staple-bg: #fbf3e6;
   --staple-line: #ecd9b8;
   --danger: #b5533f;
+  --danger-bg: #fbe8e4;
+  /* Secondary accent (warm terracotta/gold) -- tags, ratings-adjacent UI,
+     anything that isn't an action, so green reads unambiguously as
+     "do something" everywhere it appears. */
+  --accent: #c1652f;
+  --accent-dark: #9c4f24;
+  --accent-bg: #f7e3d3;
+  --gold: #c99a2e;
+  --shadow: rgba(64, 44, 22, 0.12);
+  --shadow-soft: rgba(64, 44, 22, 0.07);
+  --font-heading: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ink: #ece5d8;
+    --leaf: #5fa872;
+    --leaf-dark: #8fd6a0;
+    --leaf-bg: #1e3327;
+    --cream: #201c17;
+    --card: #2a2520;
+    --line: #423a2f;
+    --muted: #a89f8d;
+    --staple: #d9a75a;
+    --staple-bg: #382c19;
+    --staple-line: #55432a;
+    --danger: #e2796a;
+    --danger-bg: #3a221c;
+    --accent: #e08a54;
+    --accent-dark: #f0a875;
+    --accent-bg: #3a2818;
+    --gold: #e0b84a;
+    --shadow: rgba(0, 0, 0, 0.4);
+    --shadow-soft: rgba(0, 0, 0, 0.28);
+  }
 }
 * { box-sizing: border-box; }
 body {
   margin: 0;
-  background: var(--cream);
+  background-color: var(--cream);
+  /* A barely-there grain so flat surfaces don't feel like a bare
+     component-library background -- pure CSS/SVG, no network request,
+     so it costs nothing offline. */
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.05'/%3E%3C/svg%3E");
   color: var(--ink);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   -webkit-tap-highlight-color: transparent;
+  transition: background-color 0.2s ease, color 0.2s ease;
 }
 header {
   position: sticky; top: 0; z-index: 10;
@@ -28,9 +67,9 @@ header {
 }
 h1 {
   margin: 0 0 12px;
-  font-family: Georgia, "Times New Roman", serif;
-  font-size: 1.5rem;
-  letter-spacing: -0.01em;
+  font-family: var(--font-heading);
+  font-size: 1.6rem;
+  letter-spacing: -0.015em;
   color: var(--leaf-dark);
   display: flex; align-items: center; gap: 8px;
 }
@@ -52,9 +91,33 @@ h1 svg { flex-shrink: 0; }
   padding: 9px 2px;
   border-radius: 8px;
   white-space: nowrap;
+  transition: background 0.15s ease, color 0.15s ease;
 }
 .tab-btn.active { background: var(--cream); color: var(--ink); }
 main { padding: 14px 18px 70px; max-width: 720px; margin: 0 auto; }
+
+/* Motion -- a few deliberately small touches: cards ease in on render
+   instead of popping in instantly, and interactive elements give a
+   momentary press cue, so the app reads as responsive rather than static.
+   Kept subtle and short (<300ms) so it never feels like it's in the way. */
+@keyframes cardIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.recipe-card, .detail-card, .settings-card {
+  animation: cardIn 0.28s ease both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .recipe-card, .detail-card, .settings-card { animation: none; }
+}
+.recipe-card { transition: transform 0.12s ease, box-shadow 0.12s ease; }
+.recipe-card:active { transform: scale(0.985); }
+.primary-btn, .secondary-btn, .mini-btn, .icon-btn {
+  transition: transform 0.1s ease, background 0.15s ease, color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.primary-btn:active, .secondary-btn:active, .mini-btn:active, .icon-btn:active {
+  transform: scale(0.96);
+}
 
 /* Recipe list */
 .toolbar { display:flex; gap:8px; margin-bottom: 14px; flex-wrap: wrap; }
@@ -77,13 +140,22 @@ main { padding: 14px 18px 70px; max-width: 720px; margin: 0 auto; }
 }
 .intro-note { font-size: 0.85rem; color: var(--muted); margin: 0 0 14px; line-height: 1.4; }
 .recipe-card {
-  background: var(--card); border: 1px solid var(--line); border-radius: 14px;
-  padding: 14px 16px; margin-bottom: 10px; cursor: pointer;
+  background: var(--card); border: 1px solid var(--line); border-radius: 16px;
+  margin-bottom: 10px; cursor: pointer;
+  box-shadow: 0 1px 2px var(--shadow-soft), 0 4px 12px var(--shadow-soft);
+  overflow: hidden;
 }
-.recipe-card h3 { margin: 0 0 4px; font-size: 1.05rem; font-family: Georgia, serif; }
+.recipe-card-body { padding: 14px 16px; }
+/* A real photo if one's been added; otherwise a deterministic color band
+   (from the title) so cards still read as distinct "hero" items rather
+   than uniform list rows, even without a picture. */
+.recipe-card-media { width: 100%; height: 120px; }
+.recipe-card-media img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.recipe-card-swatch { opacity: 0.88; }
+.recipe-card h3 { margin: 0 0 4px; font-size: 1.12rem; font-family: var(--font-heading); letter-spacing: -0.01em; }
 .stars { display:inline-flex; gap:1px; margin-bottom: 4px; }
 .star { font-size: 0.92rem; color: var(--line); line-height: 1; }
-.star.filled { color: #d9a441; }
+.star.filled { color: var(--gold); }
 .stars.interactive .star { cursor: pointer; padding: 1px; }
 #ratingPopupStars .star { cursor: pointer; font-size: 1.7rem; padding: 4px; }
 .recipe-meta { font-size: 0.78rem; color: var(--muted); margin-bottom: 6px; }
@@ -93,7 +165,7 @@ main { padding: 14px 18px 70px; max-width: 720px; margin: 0 auto; }
   font-weight: 600; text-decoration: none;
 }
 .serves-review { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; margin-bottom: 10px; }
-.serves-review h4 { margin: 0 0 8px; font-family: Georgia, serif; font-size: 0.98rem; }
+.serves-review h4 { margin: 0 0 8px; font-family: var(--font-heading); font-size: 0.98rem; }
 .serves-row { display:flex; align-items:center; gap:8px; font-size: 0.85rem; }
 .serves-row input[type="number"] {
   width: 64px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px;
@@ -102,12 +174,14 @@ main { padding: 14px 18px 70px; max-width: 720px; margin: 0 auto; }
 .tag-row { display:flex; flex-wrap: wrap; gap: 5px; }
 .tag {
   font-size: 0.66rem; font-weight: 600; letter-spacing: 0.01em;
-  color: var(--leaf-dark); background: var(--leaf-bg);
+  color: var(--accent-dark); background: var(--accent-bg);
   padding: 2px 8px; border-radius: 99px; white-space: nowrap;
 }
 .rustle-tag-chip, .rustle-ing-chip {
-  cursor: pointer; font-size: 0.78rem; padding: 5px 11px; border: 1px solid var(--leaf-bg);
+  cursor: pointer; font-size: 0.78rem; padding: 5px 11px; border: 1px solid var(--accent-bg);
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease, transform 0.1s ease;
 }
+.rustle-tag-chip:active, .rustle-ing-chip:active { transform: scale(0.96); }
 .rustle-tag-chip.selected { background: var(--leaf); color: #fff; border-color: var(--leaf); }
 .rustle-ing-chip { background: var(--staple-bg); color: var(--staple); border-color: var(--staple-line); }
 .card-actions { display:flex; gap:8px; margin-top:10px; flex-wrap: wrap; }
@@ -126,8 +200,17 @@ main { padding: 14px 18px 70px; max-width: 720px; margin: 0 auto; }
   background: none; border: none; color: var(--leaf-dark); font-size: 0.85rem;
   font-weight: 600; padding: 0 0 12px; cursor: pointer;
 }
-.detail-card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 18px; }
-.detail-card h2 { margin: 0 0 4px; font-family: Georgia, serif; }
+.detail-card { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 18px; box-shadow: 0 1px 2px var(--shadow-soft), 0 4px 16px var(--shadow-soft); }
+.detail-photo {
+  border-radius: 16px; overflow: hidden; margin-bottom: 12px; max-height: 280px;
+  box-shadow: 0 1px 2px var(--shadow-soft), 0 4px 16px var(--shadow-soft);
+}
+.detail-photo img { width: 100%; height: 100%; max-height: 280px; object-fit: cover; display: block; }
+.form-photo-preview {
+  display: block; width: 100%; max-height: 220px; object-fit: cover;
+  border-radius: 10px; margin-bottom: 8px;
+}
+.detail-card h2 { margin: 0 0 4px; font-family: var(--font-heading); font-size: 1.4rem; letter-spacing: -0.01em; }
 .section-label {
   font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.08em;
   color: var(--leaf-dark); margin: 18px 0 8px; padding-bottom: 4px;
@@ -149,7 +232,7 @@ textarea {
 }
 .status-msg { font-size: 0.85rem; margin-top: 10px; padding: 10px 12px; border-radius: 8px; }
 .status-ok { background: var(--leaf-bg); color: var(--leaf-dark); }
-.status-err { background: #fbe8e4; color: var(--danger); }
+.status-err { background: var(--danger-bg); color: var(--danger); }
 .status-msg.with-action { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom: 14px; }
 .link-btn { background:none; border:none; color: inherit; font-weight:700; text-decoration:underline; font-size:0.85rem; padding:0; flex-shrink:0; }
 .schema-box {
@@ -214,7 +297,7 @@ textarea {
 }
 .drag-handle:active { cursor: grabbing; }
 .shop-item.dragging { z-index: 5; }
-.shop-item.dragging .swipe-content { background: var(--card); box-shadow: 0 6px 16px rgba(0,0,0,0.18); border-radius: 8px; }
+.shop-item.dragging .swipe-content { background: var(--card); box-shadow: 0 6px 16px var(--shadow); border-radius: 8px; }
 .shop-item:not(.dragging) { transition: transform 0.12s ease; }
 .shop-item.selected .swipe-content { background: var(--leaf-bg); border-radius: 8px; }
 .select-box.checked { background: var(--leaf); border-color: var(--leaf); }
@@ -243,8 +326,8 @@ textarea {
 .home-plan-title { font-size: 0.92rem; }
 
 /* Settings / ingredient catalog */
-.settings-card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 16px; margin-bottom: 14px; }
-.settings-card h3 { margin: 0 0 8px; font-family: Georgia, serif; font-size: 1rem; }
+.settings-card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 16px; margin-bottom: 14px; box-shadow: 0 1px 2px var(--shadow-soft); }
+.settings-card h3 { margin: 0 0 8px; font-family: var(--font-heading); font-size: 1.05rem; }
 .settings-card p { font-size: 0.85rem; color: var(--muted); margin: 0 0 10px; line-height: 1.4; }
 .btn-row { display:flex; gap:8px; flex-wrap: wrap; }
 .secondary-btn {
@@ -314,9 +397,13 @@ input[type="file"] { display: none; }
 /* Global undo toast */
 .undo-toast {
   position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%);
-  background: var(--ink); color: #fff; padding: 12px 16px; border-radius: 10px;
+  /* Fixed dark chrome regardless of theme -- a snackbar reads as "dark
+     surface" by convention in both light and dark mode, so this doesn't
+     use var(--ink), which intentionally flips to a light color in dark
+     mode for on-page text. */
+  background: #2b2622; color: #fff; padding: 12px 16px; border-radius: 10px;
   display:flex; align-items:center; gap:16px; font-size:0.85rem;
-  box-shadow: 0 6px 20px rgba(0,0,0,0.28); z-index: 50; max-width: calc(100% - 36px);
+  box-shadow: 0 6px 20px rgba(0,0,0,0.35); z-index: 50; max-width: calc(100% - 36px);
 }
 .undo-toast.hidden { display: none; }
 .undo-toast button {
@@ -329,13 +416,17 @@ input[type="file"] { display: none; }
    pinned to the top so it doesn't fight with the undo toast at the bottom. */
 .update-banner {
   position: fixed; top: 0; left: 0; right: 0; z-index: 60;
-  background: var(--leaf-dark); color: #fff; padding: 10px 16px;
+  /* var(--leaf), not --leaf-dark: this needs a solid background that
+     stays legible with white text in both themes, whereas --leaf-dark is
+     the "readable text on page background" role and flips to a light
+     tint in dark mode (which would break white-on-white here). */
+  background: var(--leaf); color: #fff; padding: 10px 16px;
   display:flex; align-items:center; justify-content:center; gap:14px; font-size:0.85rem;
-  box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+  box-shadow: 0 2px 10px var(--shadow);
 }
 .update-banner.hidden { display: none; }
 .update-banner button {
-  background:#fff; color: var(--leaf-dark); border:none; font-weight:700; font-size:0.8rem;
+  background:#fff; color: var(--leaf); border:none; font-weight:700; font-size:0.8rem;
   padding: 5px 12px; border-radius: 6px; flex-shrink:0;
 }
 
@@ -347,9 +438,9 @@ input[type="file"] { display: none; }
 }
 .rating-popup {
   background: var(--card); border-radius: 14px; padding: 20px; max-width: 320px; width: 100%;
-  text-align: center; box-shadow: 0 12px 30px rgba(0,0,0,0.3);
+  text-align: center; box-shadow: 0 12px 30px var(--shadow);
 }
-.rating-popup h4 { margin: 0 0 4px; font-family: Georgia, serif; font-size: 1.05rem; }
+.rating-popup h4 { margin: 0 0 4px; font-family: var(--font-heading); font-size: 1.05rem; }
 .rating-popup p { margin: 0 0 12px; font-size: 0.85rem; color: var(--muted); }
 .rating-popup .stars { justify-content: center; margin-bottom: 14px; }
 .rating-popup #ratingPopupStars { display:flex; justify-content:center; }

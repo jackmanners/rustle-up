@@ -125,6 +125,35 @@ function slugify(str) {
   return str.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
 }
 
+// Recipe photos are stored inline as base64 in IndexedDB (no image
+// hosting/server -- consistent with everything else in this app being
+// fully local). Downscaling + re-encoding as JPEG here keeps that from
+// bloating storage or export size the way a raw phone-camera photo would.
+function resizeImageFile(file, maxDim, quality) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error);
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error("Not a readable image"));
+      img.onload = () => {
+        let { width, height } = img;
+        if (width > maxDim || height > maxDim) {
+          if (width > height) { height = Math.round(height * (maxDim / width)); width = maxDim; }
+          else { width = Math.round(width * (maxDim / height)); height = maxDim; }
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        canvas.getContext("2d").drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL("image/jpeg", quality));
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
 /* ---------- Global undo toast ----------
    Every destructive action (delete, clear, edit) routes through this
    instead of a confirm() dialog: do the action immediately, then show
@@ -1219,13 +1248,16 @@ async function renderRustleUp(opts) {
       const inPlan = planIds.has(r.id);
       const why = [...matchedTags, ...matchedIngredients.map(t => `"${t}"`)];
       return `<div class="recipe-card" data-id="${escapeAttr(r.id)}">
-        <h3>${escapeHtml(r.title)}</h3>
-        ${starsHtml(r.rating)}
-        <div class="recipe-meta">${[r.servesLabel, r.time].filter(Boolean).join(" &middot; ")}</div>
-        ${why.length ? `<div class="item-src">Matches: ${why.map(escapeHtml).join(", ")}</div>` : ""}
-        <div class="tag-row">${(r.tags || []).map(t => `<span class="tag">${escapeHtml(t)}</span>`).join("")}</div>
-        <div class="card-actions">
-          <button class="mini-btn ${inPlan ? "selected" : ""}" data-action="rustle-plan-toggle" data-id="${escapeAttr(r.id)}">${inPlan ? "✓ In meal plan" : "+ Add to meal plan"}</button>
+        ${recipeCardMediaHtml(r)}
+        <div class="recipe-card-body">
+          <h3>${escapeHtml(r.title)}</h3>
+          ${starsHtml(r.rating)}
+          <div class="recipe-meta">${[r.servesLabel, r.time].filter(Boolean).join(" &middot; ")}</div>
+          ${why.length ? `<div class="item-src">Matches: ${why.map(escapeHtml).join(", ")}</div>` : ""}
+          <div class="tag-row">${(r.tags || []).map(t => `<span class="tag">${escapeHtml(t)}</span>`).join("")}</div>
+          <div class="card-actions">
+            <button class="mini-btn ${inPlan ? "selected" : ""}" data-action="rustle-plan-toggle" data-id="${escapeAttr(r.id)}">${inPlan ? "✓ In meal plan" : "+ Add to meal plan"}</button>
+          </div>
         </div>
       </div>`;
     }).join("");
@@ -1361,15 +1393,18 @@ function renderRecipeList(recipes, planIds) {
       const inPlan = planIds.has(r.id);
       const metaParts = [r.servesLabel, r.time].filter(Boolean).join(" &middot; ");
       html += `<div class="recipe-card" data-id="${escapeAttr(r.id)}">
-        <h3>${escapeHtml(r.title)}</h3>
-        ${starsHtml(r.rating)}
-        <div class="recipe-meta">${metaParts}</div>
-        ${sourceLineHtml(r)}
-        ${cookedInfoHtml(r)}
-        <div class="tag-row">${(r.tags || []).map(t => `<span class="tag">${escapeHtml(t)}</span>`).join("")}</div>
-        <div class="card-actions">
-          <button class="mini-btn ${inPlan ? "selected" : ""}" data-action="plan-toggle" data-id="${escapeAttr(r.id)}">${inPlan ? "✓ In meal plan" : "+ Add to meal plan"}</button>
-          <button class="mini-btn danger" data-action="delete" data-id="${escapeAttr(r.id)}">Delete</button>
+        ${recipeCardMediaHtml(r)}
+        <div class="recipe-card-body">
+          <h3>${escapeHtml(r.title)}</h3>
+          ${starsHtml(r.rating)}
+          <div class="recipe-meta">${metaParts}</div>
+          ${sourceLineHtml(r)}
+          ${cookedInfoHtml(r)}
+          <div class="tag-row">${(r.tags || []).map(t => `<span class="tag">${escapeHtml(t)}</span>`).join("")}</div>
+          <div class="card-actions">
+            <button class="mini-btn ${inPlan ? "selected" : ""}" data-action="plan-toggle" data-id="${escapeAttr(r.id)}">${inPlan ? "✓ In meal plan" : "+ Add to meal plan"}</button>
+            <button class="mini-btn danger" data-action="delete" data-id="${escapeAttr(r.id)}">Delete</button>
+          </div>
         </div>
       </div>`;
     });
@@ -1499,6 +1534,22 @@ function sourceLineHtml(r) {
   return `<div class="recipe-meta">${escapeHtml(r.source)}</div>`;
 }
 
+// A small fixed palette so a recipe without a photo still gets a distinct,
+// recognizable color band on its card (same title always maps to the same
+// color) instead of every card looking identical.
+const CARD_SWATCH_COLORS = ["#4a7c59", "#c1652f", "#b8863b", "#5b84a6", "#96608f"];
+function swatchColorForTitle(title) {
+  let hash = 0;
+  for (let i = 0; i < title.length; i++) hash = (hash * 31 + title.charCodeAt(i)) >>> 0;
+  return CARD_SWATCH_COLORS[hash % CARD_SWATCH_COLORS.length];
+}
+function recipeCardMediaHtml(recipe) {
+  if (recipe.photo) {
+    return `<div class="recipe-card-media"><img src="${escapeAttr(recipe.photo)}" alt=""></div>`;
+  }
+  return `<div class="recipe-card-media recipe-card-swatch" style="background:${swatchColorForTitle(recipe.title || "")};"></div>`;
+}
+
 async function renderDetail(id, opts) {
   opts = opts || {};
   const main = document.getElementById("main");
@@ -1511,6 +1562,7 @@ async function renderDetail(id, opts) {
 
   main.innerHTML = `
     <button class="back-btn" id="backBtn">&larr; Back to recipes</button>
+    ${r.photo ? `<div class="detail-photo"><img src="${escapeAttr(r.photo)}" alt=""></div>` : ""}
     <div class="detail-card">
       <h2>${escapeHtml(r.title)}</h2>
       ${starsHtml(r.rating, { interactive: true, recipeId: r.id })}
@@ -1778,20 +1830,23 @@ async function renderMealPlan() {
       const metaParts = en.recipe ? [en.recipe.servesLabel, en.recipe.time].filter(Boolean).join(" &middot; ") : "Manual entry";
       const dayOptions = `<option value="">No day</option>` + MEAL_PLAN_DAYS.map(d => `<option value="${d}" ${en.day === d ? "selected" : ""}>${MEAL_PLAN_DAY_NAMES[d]}</option>`).join("");
       html += `<div class="recipe-card" data-id="${escapeAttr(en.id)}" data-recipe-id="${escapeAttr(en.recipeId || "")}" style="${en.recipe ? "" : "cursor:default;"}">
-        <h3>${escapeHtml(en.title)}</h3>
-        <div class="recipe-meta">${metaParts}</div>
-        ${en.recipe ? `<div class="tag-row">${(en.recipe.tags || []).map(t => `<span class="tag">${escapeHtml(t)}</span>`).join("")}</div>` : ""}
-        <div class="scale-row">
-          <label for="day-${escapeAttr(en.id)}">Day</label>
-          <select id="day-${escapeAttr(en.id)}" class="meal-day-select" data-entry-id="${escapeAttr(en.id)}">${dayOptions}</select>
-        </div>
-        ${en.baseServes ? `<div class="scale-row">
-          <label for="serves-${escapeAttr(en.id)}">Cooking for</label>
-          <input type="number" min="1" class="meal-serves-input" id="serves-${escapeAttr(en.id)}" data-entry-id="${escapeAttr(en.id)}" data-base-serves="${en.baseServes}" value="${en.servesOverride || en.baseServes}">
-        </div>` : ""}
-        <div class="card-actions">
-          ${en.recipeId ? `<button class="mini-btn icon-label-btn" data-action="mark-cooked" data-id="${escapeAttr(en.id)}">${ICON_FLAME} Mark as cooked</button>` : ""}
-          <button class="mini-btn danger" data-action="remove-entry" data-id="${escapeAttr(en.id)}">Remove from plan</button>
+        ${en.recipe ? recipeCardMediaHtml(en.recipe) : ""}
+        <div class="recipe-card-body">
+          <h3>${escapeHtml(en.title)}</h3>
+          <div class="recipe-meta">${metaParts}</div>
+          ${en.recipe ? `<div class="tag-row">${(en.recipe.tags || []).map(t => `<span class="tag">${escapeHtml(t)}</span>`).join("")}</div>` : ""}
+          <div class="scale-row">
+            <label for="day-${escapeAttr(en.id)}">Day</label>
+            <select id="day-${escapeAttr(en.id)}" class="meal-day-select" data-entry-id="${escapeAttr(en.id)}">${dayOptions}</select>
+          </div>
+          ${en.baseServes ? `<div class="scale-row">
+            <label for="serves-${escapeAttr(en.id)}">Cooking for</label>
+            <input type="number" min="1" class="meal-serves-input" id="serves-${escapeAttr(en.id)}" data-entry-id="${escapeAttr(en.id)}" data-base-serves="${en.baseServes}" value="${en.servesOverride || en.baseServes}">
+          </div>` : ""}
+          <div class="card-actions">
+            ${en.recipeId ? `<button class="mini-btn icon-label-btn" data-action="mark-cooked" data-id="${escapeAttr(en.id)}">${ICON_FLAME} Mark as cooked</button>` : ""}
+            <button class="mini-btn danger" data-action="remove-entry" data-id="${escapeAttr(en.id)}">Remove from plan</button>
+          </div>
         </div>
       </div>`;
     });
@@ -2833,6 +2888,15 @@ function renderRecipeForm(recipe, opts) {
         <div class="form-field"><label>Time</label><input type="text" id="fTime" value="${escapeAttr(r.time || "")}" placeholder="e.g. 20 min"></div>
       </div>
       <div class="form-field"><label>Rating</label><div id="fRatingStars">${starsHtml(r.rating)}</div></div>
+      <div class="form-field">
+        <label>Photo (optional)</label>
+        <div id="fPhotoPreviewArea">${r.photo ? `<img src="${escapeAttr(r.photo)}" class="form-photo-preview" alt="">` : ""}</div>
+        <div class="btn-row">
+          <button type="button" class="secondary-btn" id="fPhotoPickBtn">${r.photo ? "Change photo" : "Add a photo"}</button>
+          <button type="button" class="secondary-btn" id="fPhotoRemoveBtn" style="${r.photo ? "" : "display:none;"}">Remove photo</button>
+        </div>
+        <input type="file" id="fPhotoInput" accept="image/*">
+      </div>
       <div class="form-field"><label>Tags (comma separated)</label><input type="text" id="fTags" value="${escapeAttr((r.tags || []).join(", "))}"></div>
       <div class="form-field"><label>Ingredients (one per line)</label><textarea id="fIngredients">${escapeHtml((r.ingredients || []).join("\n"))}</textarea></div>
       <div id="unmatchedHint"></div>
@@ -2855,6 +2919,27 @@ function renderRecipeForm(recipe, opts) {
     });
   }
   wireFormStars();
+  let formPhoto = r.photo || null;
+  document.getElementById("fPhotoPickBtn").addEventListener("click", () => document.getElementById("fPhotoInput").click());
+  document.getElementById("fPhotoRemoveBtn").addEventListener("click", () => {
+    formPhoto = null;
+    document.getElementById("fPhotoPreviewArea").innerHTML = "";
+    document.getElementById("fPhotoPickBtn").textContent = "Add a photo";
+    document.getElementById("fPhotoRemoveBtn").style.display = "none";
+  });
+  document.getElementById("fPhotoInput").addEventListener("change", async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    try {
+      formPhoto = await resizeImageFile(file, 900, 0.75);
+      document.getElementById("fPhotoPreviewArea").innerHTML = `<img src="${escapeAttr(formPhoto)}" class="form-photo-preview" alt="">`;
+      document.getElementById("fPhotoPickBtn").textContent = "Change photo";
+      document.getElementById("fPhotoRemoveBtn").style.display = "";
+    } catch (err) {
+      document.getElementById("formStatus").innerHTML = `<div class="status-msg status-err">Couldn't read that image -- try a different file.</div>`;
+    }
+    e.target.value = "";
+  });
   const ingredientsField = document.getElementById("fIngredients");
   let unmatchedDebounce = null;
   ingredientsField.addEventListener("input", () => {
@@ -2883,7 +2968,7 @@ function renderRecipeForm(recipe, opts) {
     const savedRecipe = {
       id: isEdit ? r.id : slugify(title) + "-" + Date.now().toString(36).slice(-4),
       title, source, sourceUrl, tags, serves, servesLabel, time, ingredients, method, notes,
-      rating: formRating, timesCooked: r.timesCooked || 0, lastCooked: r.lastCooked || null,
+      rating: formRating, timesCooked: r.timesCooked || 0, lastCooked: r.lastCooked || null, photo: formPhoto,
       dateAdded: r.dateAdded || new Date().toISOString().slice(0, 10)
     };
     await putRecipe(savedRecipe);
@@ -2971,6 +3056,8 @@ async function handleConfirmImport() {
       ingredients: item.ingredients || [],
       method: item.method || [],
       notes: item.notes || "",
+      rating: item.rating || 0, timesCooked: item.timesCooked || 0, lastCooked: item.lastCooked || null,
+      photo: item.photo || null,
       dateAdded: item.dateAdded || new Date().toISOString().slice(0, 10)
     };
     await putRecipe(recipe);
@@ -3122,6 +3209,8 @@ function handleFileImport(e) {
           ingredients: item.ingredients || [],
           method: item.method || [],
           notes: item.notes || "",
+          rating: item.rating || 0, timesCooked: item.timesCooked || 0, lastCooked: item.lastCooked || null,
+          photo: item.photo || null,
           dateAdded: item.dateAdded || new Date().toISOString().slice(0, 10)
         };
         await putRecipe(recipe);
