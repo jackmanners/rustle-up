@@ -147,12 +147,13 @@ main.home-screen {
 main.home-screen .settings-card:first-child {
   flex: 1;
   min-height: 0;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
 }
 main.home-screen .settings-card:first-child .home-plan-list {
   flex: 1;
-  min-height: 40px;
+  min-height: 48px;
 }
 main.home-screen .settings-card:not(:first-child),
 main.home-screen > .btn-row {
@@ -253,13 +254,34 @@ main.home-screen > .btn-row {
   color: var(--accent-dark); background: var(--accent-bg);
   padding: 2px 8px; border-radius: 99px; white-space: nowrap;
 }
-.rustle-tag-chip, .rustle-ing-chip {
-  cursor: pointer; font-size: 0.78rem; padding: 5px 11px; border: 1px solid var(--accent-bg);
-  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease, transform 0.1s ease;
+/* Rustle Up: one input, autocompleted against tags + known ingredient
+   names, rather than a separate tag-chip grid and ingredient box. */
+.rustle-input-wrap { position: relative; }
+.rustle-input-wrap input[type="text"] {
+  width: 100%; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px;
+  font-size: 0.9rem; background: var(--card); color: var(--ink);
 }
-.rustle-tag-chip:active, .rustle-ing-chip:active { transform: scale(0.96); }
-.rustle-tag-chip.selected { background: var(--leaf); color: #fff; border-color: var(--leaf); }
-.rustle-ing-chip { background: var(--staple-bg); color: var(--staple); border-color: var(--staple-line); }
+.rustle-suggestions {
+  position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 20;
+  background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+  box-shadow: 0 6px 20px var(--shadow); max-height: 260px; overflow-y: auto;
+}
+.rustle-suggestions.hidden { display: none; }
+.rustle-suggestion-item {
+  display: flex; width: 100%; align-items: center; justify-content: space-between;
+  gap: 8px; padding: 9px 12px; border: none; background: none; text-align: left;
+  border-bottom: 1px solid var(--line); font-size: 0.88rem; color: var(--ink); cursor: pointer;
+}
+.rustle-suggestion-item:last-child { border-bottom: none; }
+.rustle-suggestion-item:active { background: var(--cream); }
+.rustle-suggestion-type {
+  font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); flex-shrink: 0;
+}
+.rustle-selected-chip {
+  cursor: pointer; transition: transform 0.1s ease;
+}
+.rustle-selected-chip:active { transform: scale(0.96); }
+.rustle-ing-chip { background: var(--staple-bg); color: var(--staple); }
 .card-actions { display:flex; gap:8px; margin-top:10px; flex-wrap: wrap; align-items: center; }
 .mini-btn {
   font-size: 0.72rem; border: 1px solid var(--line); background: var(--cream);
@@ -412,7 +434,7 @@ textarea {
 .empty-msg { color: var(--muted); font-size: 0.9rem; text-align: center; padding: 40px 20px; }
 
 /* Home dashboard */
-.home-plan-list { max-height: 340px; overflow-y: auto; }
+.home-plan-list { max-height: 400px; overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling: touch; }
 .home-plan-row {
   display:flex; align-items:center; gap:8px; padding: 8px 2px; border-bottom: 1px solid var(--line); cursor: pointer;
 }

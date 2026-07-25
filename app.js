@@ -1183,6 +1183,37 @@ function ingredientTermScore(term, ingredientName) {
   return 0;
 }
 
+// Every distinct ingredient name that actually appears in some recipe
+// (post-parsing, so "2 onions" and "onions" collapse together) -- the
+// candidate pool for ingredient suggestions, so nothing suggested is a
+// guaranteed dead end.
+function allIngredientNames(recipes) {
+  const set = new Set();
+  recipes.forEach(r => (r.ingredients || []).forEach(line => {
+    const name = parseIngredient(line).name;
+    if (name) set.add(name.toLowerCase());
+  }));
+  return [...set].sort();
+}
+
+// Suggestions for the single Rustle Up input: every tag and every known
+// ingredient name, scored the same way results are ranked (exact >
+// substring > fuzzy) so a suggestion is never a worse match than what's
+// typed. Ties favor tags -- a whole tag is a more reliable filter than a
+// fragment of ingredient text landing on the same score.
+function computeRustleSuggestions(query, tags, ingredientNames, selectedTags, selectedIngredients) {
+  const q = query.trim();
+  if (!q) return [];
+  const candidates = [];
+  tags.forEach(t => { if (!selectedTags.has(t)) candidates.push({ type: "tag", value: t }); });
+  ingredientNames.forEach(n => { if (!selectedIngredients.includes(n)) candidates.push({ type: "ingredient", value: n }); });
+  return candidates
+    .map(c => ({ ...c, score: ingredientTermScore(q, c.value) }))
+    .filter(c => c.score > 0)
+    .sort((a, b) => b.score - a.score || (a.type !== b.type ? (a.type === "tag" ? -1 : 1) : a.value.localeCompare(b.value)))
+    .slice(0, 8);
+}
+
 // Ranks every recipe against the selected tags/ingredients. Recipes that
 // match nothing are dropped entirely; the rest are sorted by total score
 // so a recipe hitting more/stronger filters surfaces first, without
@@ -1217,28 +1248,19 @@ async function renderRustleUp(opts) {
   const main = document.getElementById("main");
   const recipes = await getAllRecipes();
   const tags = allTags(recipes);
-  const catalog = sortCatalogByUsage(await getItemCatalog());
+  const ingredientNames = allIngredientNames(recipes);
 
   main.innerHTML = `
     <button class="back-btn" id="rustleBackBtn">&larr; Back to Home</button>
     <div class="detail-card">
       <h2 class="icon-label-heading">${ICON_SHUFFLE} Rustle Up</h2>
-      <p style="font-size:0.85rem;color:var(--muted);margin:0 0 12px;">Pick a few tags or ingredients you're in the mood for.</p>
+      <p style="font-size:0.85rem;color:var(--muted);margin:0 0 12px;">Type a tag or ingredient you're in the mood for.</p>
 
-      <div class="section-label">Tags</div>
-      <div class="tag-row" id="rustleTagRow">
-        ${tags.length === 0 ? `<span class="item-src">No tags yet -- tag some recipes first.</span>` : tags.map(t => `<span class="tag rustle-tag-chip" data-tag="${escapeAttr(t)}">${escapeHtml(t)}</span>`).join("")}
+      <div class="rustle-input-wrap">
+        <input type="text" id="rustleSearchInput" placeholder="e.g. chicken, quick, rice..." autocomplete="off">
+        <div class="rustle-suggestions hidden" id="rustleSuggestions"></div>
       </div>
-
-      <div class="section-label" style="margin-top:16px;">Ingredients</div>
-      <div class="add-item-row">
-        <input type="text" id="rustleIngInput" list="rustleIngSuggestions" placeholder="e.g. rice, chicken...">
-        <button class="secondary-btn" id="rustleIngAddBtn" style="margin-top:0;">Add</button>
-      </div>
-      <datalist id="rustleIngSuggestions">
-        ${catalog.map(e => `<option value="${escapeAttr(e.name)}">`).join("")}
-      </datalist>
-      <div class="tag-row" id="rustleIngRow" style="margin-top:8px;"></div>
+      <div class="tag-row" id="rustleSelectedRow" style="margin-top:10px;"></div>
 
       <div class="section-label" style="margin-top:16px;">Suggestions</div>
       <div id="rustleResultsArea"></div>
@@ -1249,18 +1271,83 @@ async function renderRustleUp(opts) {
 
   let rustleRenderToken = 0;
 
-  function renderIngRow() {
-    document.getElementById("rustleIngRow").innerHTML = rustleIngredientTerms.map(term => `
-      <span class="tag rustle-ing-chip" data-term="${escapeAttr(term)}">${escapeHtml(term)} &times;</span>
-    `).join("");
-    document.querySelectorAll(".rustle-ing-chip").forEach(chip => {
+  function renderSelectedRow() {
+    const row = document.getElementById("rustleSelectedRow");
+    const tagChips = [...rustleSelectedTags].map(t =>
+      `<span class="tag rustle-selected-chip" data-type="tag" data-value="${escapeAttr(t)}">${escapeHtml(t)} &times;</span>`);
+    const ingChips = rustleIngredientTerms.map(t =>
+      `<span class="tag rustle-selected-chip rustle-ing-chip" data-type="ingredient" data-value="${escapeAttr(t)}">${escapeHtml(t)} &times;</span>`);
+    row.innerHTML = [...tagChips, ...ingChips].join("");
+    row.querySelectorAll(".rustle-selected-chip").forEach(chip => {
       chip.addEventListener("click", () => {
-        rustleIngredientTerms = rustleIngredientTerms.filter(t => t !== chip.dataset.term);
-        renderIngRow();
+        if (chip.dataset.type === "tag") rustleSelectedTags.delete(chip.dataset.value);
+        else rustleIngredientTerms = rustleIngredientTerms.filter(t => t !== chip.dataset.value);
+        renderSelectedRow();
         renderResults();
       });
     });
   }
+
+  function addFilter(type, value) {
+    if (type === "tag") rustleSelectedTags.add(value);
+    else if (!rustleIngredientTerms.includes(value)) rustleIngredientTerms.push(value);
+    renderSelectedRow();
+    renderResults();
+  }
+
+  const searchInput = document.getElementById("rustleSearchInput");
+  const suggestionsEl = document.getElementById("rustleSuggestions");
+  let currentSuggestions = [];
+
+  function hideSuggestions() {
+    suggestionsEl.classList.add("hidden");
+    suggestionsEl.innerHTML = "";
+  }
+
+  function renderSuggestionList() {
+    currentSuggestions = computeRustleSuggestions(searchInput.value, tags, ingredientNames, rustleSelectedTags, rustleIngredientTerms);
+    if (currentSuggestions.length === 0) { hideSuggestions(); return; }
+    suggestionsEl.classList.remove("hidden");
+    suggestionsEl.innerHTML = currentSuggestions.map((s, i) => `
+      <button type="button" class="rustle-suggestion-item" data-index="${i}">
+        <span class="rustle-suggestion-value">${escapeHtml(s.value)}</span>
+        <span class="rustle-suggestion-type">${s.type}</span>
+      </button>`).join("");
+    suggestionsEl.querySelectorAll(".rustle-suggestion-item").forEach(btn => {
+      btn.addEventListener("mousedown", (e) => e.preventDefault()); // survive the input's blur
+      btn.addEventListener("click", () => {
+        const s = currentSuggestions[Number(btn.dataset.index)];
+        addFilter(s.type, s.value);
+        searchInput.value = "";
+        hideSuggestions();
+        searchInput.focus();
+      });
+    });
+  }
+
+  searchInput.addEventListener("input", renderSuggestionList);
+  searchInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      const val = searchInput.value.trim();
+      if (!val) return;
+      if (currentSuggestions.length > 0) {
+        addFilter(currentSuggestions[0].type, currentSuggestions[0].value);
+      } else {
+        // No known match -- still usable as a free-text ingredient search
+        // term, unless it happens to exactly name an existing tag (same
+        // "ties favor tags" rule as the suggestion ordering).
+        const lower = val.toLowerCase();
+        const matchedTag = tags.find(t => t.toLowerCase() === lower);
+        addFilter(matchedTag ? "tag" : "ingredient", matchedTag || lower);
+      }
+      searchInput.value = "";
+      hideSuggestions();
+    } else if (e.key === "Escape") {
+      hideSuggestions();
+    }
+  });
+  searchInput.addEventListener("blur", () => setTimeout(hideSuggestions, 150));
 
   async function renderResults() {
     // Guards against a slower, stale call (paused below on the getMealPlan
@@ -1323,28 +1410,7 @@ async function renderRustleUp(opts) {
     });
   }
 
-  document.querySelectorAll(".rustle-tag-chip").forEach(chip => {
-    chip.addEventListener("click", () => {
-      const t = chip.dataset.tag;
-      if (rustleSelectedTags.has(t)) { rustleSelectedTags.delete(t); chip.classList.remove("selected"); }
-      else { rustleSelectedTags.add(t); chip.classList.add("selected"); }
-      renderResults();
-    });
-  });
-
-  const ingInput = document.getElementById("rustleIngInput");
-  const addIngTerm = () => {
-    const val = ingInput.value.trim().toLowerCase();
-    if (!val || rustleIngredientTerms.includes(val)) return;
-    rustleIngredientTerms.push(val);
-    ingInput.value = "";
-    renderIngRow();
-    renderResults();
-  };
-  document.getElementById("rustleIngAddBtn").addEventListener("click", addIngTerm);
-  ingInput.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); addIngTerm(); } });
-
-  renderIngRow();
+  renderSelectedRow();
   await renderResults();
 }
 
@@ -3664,6 +3730,13 @@ function pushNav(screen, tab, params) {
   currentTab = resolvedTab;
   persistNavStack();
   pushTrap();
+  // pushNav always means "descending to a non-Home screen" -- screens
+  // reached this way (e.g. clicking "Rustle Up" from Home) render
+  // themselves directly rather than going through renderStackTop, whose
+  // own home-screen toggle would otherwise never run, leaving Home's
+  // overflow:hidden/flex-clamped layout stuck on the new screen.
+  const mainEl = document.getElementById("main");
+  if (mainEl) mainEl.classList.remove("home-screen");
 }
 
 // Lateral jump from the tab bar: reset to Home > that tab, discarding
@@ -3692,6 +3765,8 @@ function collapseTo(levels, screen, tab, params) {
   navStack.splice(navStack.length - levels, levels, { screen, tab: tab || currentTab, params: params || null });
   currentTab = tab || currentTab;
   persistNavStack();
+  const mainEl = document.getElementById("main");
+  if (mainEl) mainEl.classList.remove("home-screen");
 }
 
 function persistNavStack() {
