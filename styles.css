@@ -183,6 +183,7 @@ textarea {
 }
 .drag-handle:active { cursor: grabbing; }
 .shop-item.dragging { position: relative; z-index: 5; background: var(--card); box-shadow: 0 6px 16px rgba(0,0,0,0.18); border-radius: 8px; }
+.shop-item:not(.dragging) { transition: transform 0.12s ease; }
 .shop-item.selected { background: var(--leaf-bg); border-radius: 8px; }
 .select-box.checked { background: var(--leaf); border-color: var(--leaf); }
 .select-box.checked svg { opacity: 1; }
@@ -216,6 +217,22 @@ input[type="file"] { display: none; }
   padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; font-size: 0.8rem; background: var(--card); color: var(--ink);
 }
 .staple-check { font-size:0.78rem; display:flex; align-items:center; gap:4px; white-space: nowrap; }
+
+/* Quantity stepper on shopping items */
+.qty-row { display:flex; align-items:center; gap:6px; margin-top:5px; }
+.qty-btn {
+  width: 26px; height: 26px; border-radius: 6px; border: 1px solid var(--line); background: var(--cream);
+  color: var(--ink); font-size: 1rem; font-weight: 700; line-height: 1; padding: 0;
+}
+.qty-input {
+  width: 56px; text-align: center; padding: 4px 2px; border: 1px solid var(--line); border-radius: 6px;
+  font-size: 0.85rem; background: var(--card); color: var(--ink);
+}
+.qty-unit { font-size: 0.78rem; color: var(--muted); min-width: 20px; }
+
+/* Meal plan ingredient comparison view */
+.compare-item { display:flex; align-items:center; gap:10px; padding: 10px 2px; border-bottom: 1px solid var(--line); }
+.compare-item:last-child { border-bottom: none; }
 
 /* Collapsible notes card (Meal Plan / Shopping List) */
 .notes-card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; margin-bottom: 14px; overflow: hidden; }
