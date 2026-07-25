@@ -1,4 +1,4 @@
-const CACHE_NAME = "rustle-up-v32";
+const CACHE_NAME = "rustle-up-v34";
 // Code files use network-first below so edits show up immediately without
 // bumping this version; it still matters for the app-shell files (HTML,
 // manifest, icons) and as the offline fallback for the code files too.
@@ -9,10 +9,10 @@ const ASSETS = [
   "./styles.css",
   "./app.js",
   "./manifest.json",
-  "./icons/icon-192.png",
-  "./icons/icon-192-maskable.png",
-  "./icons/icon-512.png",
-  "./icons/icon-512-maskable.png"
+  "./icons/icon-192.png?v=2",
+  "./icons/icon-192-maskable.png?v=2",
+  "./icons/icon-512.png?v=2",
+  "./icons/icon-512-maskable.png?v=2"
 ];
 
 // On install, cache the app shell so it works fully offline.

@@ -44,6 +44,7 @@ const ICON_LIST = `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" s
 const ICON_CLIPBOARD = `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/></svg>`;
 const ICON_CHEVRON_DOWN = `<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>`;
 const ICON_EYE = `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>`;
+const ICON_MORE = `<svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg>`;
 
 // Applied immediately (before IndexedDB/DOM setup) to avoid a flash of
 // the wrong theme on load if it's been explicitly overridden.
@@ -62,6 +63,7 @@ let pendingImport = null; // recipes parsed but awaiting serves confirmation
 let showCheckedItems = false;
 let shopSelectMode = false;
 let selectedShopIds = new Set();
+let shopMenuOpen = false;
 let mealPlanNotesOpen = false;
 let shopNotesOpen = false;
 
@@ -2296,14 +2298,7 @@ async function renderShoppingList() {
     <div class="toolbar">
       ${searchBoxHtml("shopSearchInput", "Search your list...", currentShopSearch)}
     </div>
-    <div class="btn-row" style="margin-bottom:14px;">
-      <button class="secondary-btn icon-label-btn" id="pasteListBtn">${ICON_CLIPBOARD} Paste a list</button>
-      <button class="secondary-btn" id="newListBtn">New list</button>
-      <button class="secondary-btn icon-label-btn" id="manageIngredientsBtn">${ICON_LIST} Items</button>
-      <button class="icon-btn" id="exportShopBtn" title="Export list as JSON">${ICON_DOWNLOAD}</button>
-      <button class="icon-btn" id="importShopBtn" title="Import list from JSON">${ICON_UPLOAD}</button>
-      <input type="file" id="shopFileInput" accept="application/json">
-    </div>
+    <input type="file" id="shopFileInput" accept="application/json" style="display:none;">
     <div id="shopListArea"></div>
   `;
 
@@ -2312,11 +2307,6 @@ async function renderShoppingList() {
   document.getElementById("newItemInput").addEventListener("keydown", (e) => {
     if (e.key === "Enter") addManualItem();
   });
-  document.getElementById("pasteListBtn").addEventListener("click", () => renderPasteList());
-  document.getElementById("newListBtn").addEventListener("click", startNewShoppingList);
-  document.getElementById("manageIngredientsBtn").addEventListener("click", () => renderItemCatalog());
-  document.getElementById("exportShopBtn").addEventListener("click", exportShopList);
-  document.getElementById("importShopBtn").addEventListener("click", () => document.getElementById("shopFileInput").click());
   document.getElementById("shopFileInput").addEventListener("change", handleShopListFileImport);
   document.getElementById("shopSearchInput").addEventListener("input", (e) => {
     currentShopSearch = e.target.value;
@@ -2339,14 +2329,46 @@ async function renderShopListArea() {
   const nonStaple = unchecked.filter(i => !i.staple);
   const staples = unchecked.filter(i => i.staple);
 
-  let html = "";
+  // Toolbar sits at the top, above the list, always -- select mode swaps in
+  // its own controls; everything used less than "every visit" (paste, new
+  // list, item manager, order/export/import, clear) is tucked behind the
+  // "More" menu instead of lining up a wall of buttons under the list.
+  let html = `<div class="shop-toolbar">`;
+  if (shopSelectMode) {
+    const n = selectedShopIds.size;
+    html += `<button class="secondary-btn" id="moveUpBtn" ${n === 0 ? "disabled" : ""}>Move up${n ? ` (${n})` : ""}</button>`;
+    html += `<button class="secondary-btn" id="moveDownBtn" ${n === 0 ? "disabled" : ""}>Move down${n ? ` (${n})` : ""}</button>`;
+    html += `<button class="secondary-btn" id="doneSelectBtn">Done</button>`;
+  } else {
+    html += `<button class="secondary-btn" id="selectModeBtn">Select</button>`;
+    if (checked.length > 0) {
+      html += `<button class="secondary-btn" id="toggleCheckedBtn">${showCheckedItems ? "Hide" : "Show"} checked (${checked.length})</button>`;
+    }
+    html += `<div class="menu-wrap">
+      <button class="icon-btn" id="shopMenuBtn" title="More actions">${ICON_MORE}</button>
+      <div class="menu-popup" id="shopMenuPopup" style="display:${shopMenuOpen ? "flex" : "none"};">
+        <button class="menu-item" id="pasteListBtn">${ICON_CLIPBOARD} Paste a list</button>
+        <button class="menu-item" id="newListBtn">New list</button>
+        <div class="menu-divider"></div>
+        <button class="menu-item" id="updateOrderBtn">Update order</button>
+        <button class="menu-item" id="copyTextBtn">Copy as text</button>
+        <button class="menu-item" id="exportShopBtn">${ICON_DOWNLOAD} Export list</button>
+        <button class="menu-item" id="importShopBtn">${ICON_UPLOAD} Import list</button>
+        <div class="menu-divider"></div>
+        <button class="menu-item danger" id="clearCheckedBtn">Clear checked</button>
+        <button class="menu-item danger" id="clearAllBtn">Clear all</button>
+      </div>
+    </div>`;
+  }
+  html += `</div>`;
+
   if (items.length === 0) {
     html += `<div class="empty-msg">Empty. Add items above, or compare against your Meal Plan.</div>`;
   } else if (term && nonStaple.length === 0 && staples.length === 0 && checked.length === 0) {
     html += `<div class="empty-msg">No items match "${escapeHtml(currentShopSearch)}".</div>`;
   } else {
     if (nonStaple.length === 0 && staples.length === 0) {
-      html += `<div class="empty-msg">Everything's checked off!${checked.length ? " Tap “Show checked” below." : ""}</div>`;
+      html += `<div class="empty-msg">Everything's checked off!${checked.length ? " Tap “Show checked” above." : ""}</div>`;
     }
     if (nonStaple.length > 0) {
       html += `<div>${nonStaple.map(item => renderShopItem(item, { scope: "main" })).join("")}</div>`;
@@ -2357,23 +2379,6 @@ async function renderShopListArea() {
         <div>${staples.map(item => renderShopItem(item, { hideBadge: true, scope: "staple" })).join("")}</div>
       </div>`;
     }
-
-    html += `<div class="btn-row" style="margin-top:16px;">`;
-    if (shopSelectMode) {
-      const n = selectedShopIds.size;
-      html += `<button class="secondary-btn" id="moveUpBtn" ${n === 0 ? "disabled" : ""}>Move up${n ? ` (${n})` : ""}</button>`;
-      html += `<button class="secondary-btn" id="moveDownBtn" ${n === 0 ? "disabled" : ""}>Move down${n ? ` (${n})` : ""}</button>`;
-      html += `<button class="secondary-btn" id="doneSelectBtn">Done</button>`;
-    } else {
-      html += `<button class="secondary-btn" id="selectModeBtn">Select</button>`;
-      html += `<button class="secondary-btn" id="updateOrderBtn">Update order</button>`;
-      html += `<button class="secondary-btn" id="copyTextBtn">Copy as text</button>`;
-      if (checked.length > 0) {
-        html += `<button class="secondary-btn" id="toggleCheckedBtn">${showCheckedItems ? "Hide" : "Show"} checked (${checked.length})</button>`;
-      }
-      html += `<button class="secondary-btn" id="clearCheckedBtn">Clear checked</button><button class="secondary-btn" id="clearAllBtn">Clear all</button>`;
-    }
-    html += `</div>`;
 
     if (!shopSelectMode && showCheckedItems && checked.length > 0) {
       html += `<div class="section-label">Checked off</div><div>${checked.sort((a, b) => a.name.localeCompare(b.name)).map(i => renderShopItem(i)).join("")}</div>`;
@@ -2480,13 +2485,36 @@ async function renderShopListArea() {
   const moveDownBtn = document.getElementById("moveDownBtn");
   if (moveDownBtn) moveDownBtn.addEventListener("click", () => moveSelectedItems(1));
 
+  const shopMenuBtn = document.getElementById("shopMenuBtn");
+  const shopMenuPopup = document.getElementById("shopMenuPopup");
+  if (shopMenuBtn) {
+    // Toggles the popup directly (no re-render) so opening the menu doesn't
+    // destroy/recreate the button itself -- a full re-render here would
+    // detach the just-clicked button and fire a spurious blur, closing the
+    // menu the instant it opened.
+    shopMenuBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      shopMenuOpen = !shopMenuOpen;
+      if (shopMenuPopup) shopMenuPopup.style.display = shopMenuOpen ? "flex" : "none";
+    });
+  }
+  const pasteListBtn = document.getElementById("pasteListBtn");
+  if (pasteListBtn) pasteListBtn.addEventListener("click", () => { shopMenuOpen = false; renderPasteList(); });
+  const newListBtn = document.getElementById("newListBtn");
+  if (newListBtn) newListBtn.addEventListener("click", () => { shopMenuOpen = false; startNewShoppingList(); });
+  const exportShopBtn = document.getElementById("exportShopBtn");
+  if (exportShopBtn) exportShopBtn.addEventListener("click", () => { shopMenuOpen = false; exportShopList(); });
+  const importShopBtn = document.getElementById("importShopBtn");
+  if (importShopBtn) importShopBtn.addEventListener("click", () => { shopMenuOpen = false; document.getElementById("shopFileInput").click(); });
+
   const updateOrderBtn = document.getElementById("updateOrderBtn");
   if (updateOrderBtn) updateOrderBtn.addEventListener("click", async () => {
+    shopMenuOpen = false;
     await updateShopOrder();
     showToast("Order saved -- new items will slot in around this.", null, null);
   });
   const copyTextBtn = document.getElementById("copyTextBtn");
-  if (copyTextBtn) copyTextBtn.addEventListener("click", copyShoppingListText);
+  if (copyTextBtn) copyTextBtn.addEventListener("click", () => { shopMenuOpen = false; copyShoppingListText(); });
   const toggleCheckedBtn = document.getElementById("toggleCheckedBtn");
   if (toggleCheckedBtn) toggleCheckedBtn.addEventListener("click", () => {
     showCheckedItems = !showCheckedItems;
@@ -2494,9 +2522,10 @@ async function renderShopListArea() {
   });
   const clearCheckedBtn = document.getElementById("clearCheckedBtn");
   if (clearCheckedBtn) clearCheckedBtn.addEventListener("click", async () => {
+    shopMenuOpen = false;
     const all = await getShopItems();
     const removed = all.filter(i => i.checked);
-    if (removed.length === 0) return;
+    if (removed.length === 0) { renderShopListArea(); return; }
     await saveShopItems(all.filter(i => !i.checked));
     showToast(`Cleared ${removed.length} checked item(s).`, async () => {
       const cur = await getShopItems();
@@ -2506,8 +2535,9 @@ async function renderShopListArea() {
   });
   const clearAllBtn = document.getElementById("clearAllBtn");
   if (clearAllBtn) clearAllBtn.addEventListener("click", async () => {
+    shopMenuOpen = false;
     const all = await getShopItems();
-    if (all.length === 0) return;
+    if (all.length === 0) { renderShopListArea(); return; }
     await archiveShoppingList(all);
     await saveShopItems([]);
     showToast(`Cleared the whole list (${all.length} item(s)).`, async () => { await saveShopItems(all); }, renderShopListArea);
@@ -2717,7 +2747,7 @@ function itemTagChipsHtml(entry) {
 
 function renderItemCatalogRow(entry) {
   return `
-    <div class="shelf-item" data-id="${escapeAttr(entry.id)}">
+    <div class="shelf-item" data-id="${escapeAttr(entry.id)}" style="border-left-color:${swatchColorForTitle(entry.name)};">
       <div class="shelf-item-main">
         <div class="drag-handle" data-action="drag-handle" title="Drag to reorder">⠿</div>
         <div class="shelf-item-body">
@@ -3049,14 +3079,11 @@ async function renderDuplicateScan() {
   });
 }
 
-async function renderItemCatalog(opts) {
-  opts = opts || {};
-  if (!opts.skipHistory) pushNav("itemCatalog", "shop");
+async function renderItemCatalog() {
   const main = document.getElementById("main");
   const catalog = await getItemCatalog();
   const tags = allItemTags(catalog);
   main.innerHTML = `
-    <button class="back-btn" id="ingBackBtn">&larr; Back to shopping list</button>
     <div class="detail-card">
       <h2>Items</h2>
       <div class="toolbar">
@@ -3075,7 +3102,6 @@ async function renderItemCatalog(opts) {
       </datalist>
     </div>
   `;
-  document.getElementById("ingBackBtn").addEventListener("click", () => history.back());
   document.getElementById("itemCatalogSearch").addEventListener("input", (e) => {
     currentItemSearch = e.target.value;
     renderItemCatalogRows();
@@ -3783,12 +3809,14 @@ function setActiveTabButtons(tab) {
   document.getElementById("tabRecipesBtn").classList.toggle("active", tab === "recipes");
   document.getElementById("tabPlanBtn").classList.toggle("active", tab === "mealplan");
   document.getElementById("tabShopBtn").classList.toggle("active", tab === "shop");
+  document.getElementById("tabItemsBtn").classList.toggle("active", tab === "items");
   document.getElementById("tabSettingsBtn").classList.toggle("active", tab === "settings");
 }
 function renderTabHome(tab) {
   if (tab === "recipes") renderRecipes();
   else if (tab === "mealplan") renderMealPlan();
-  else if (tab === "shop") { showCheckedItems = false; renderShoppingList(); }
+  else if (tab === "shop") { showCheckedItems = false; shopMenuOpen = false; renderShoppingList(); }
+  else if (tab === "items") renderItemCatalog();
   else if (tab === "settings") renderSettings();
 }
 
@@ -3821,10 +3849,23 @@ async function renderStackTop() {
   else { navStack = [{ screen: "home" }]; renderHome(); } // fallback, e.g. review with no pendingImport after reload
 }
 
+// Closes the shopping list's overflow menu on any click outside it. Kept as
+// a single persistent listener (rather than one added/removed per render)
+// because the menu button's own click handler doesn't re-render the list --
+// see renderShopListArea -- so there's no natural moment to attach/detach it.
+document.addEventListener("click", (e) => {
+  if (shopMenuOpen && !e.target.closest(".menu-wrap")) {
+    shopMenuOpen = false;
+    const popup = document.getElementById("shopMenuPopup");
+    if (popup) popup.style.display = "none";
+  }
+});
+
 document.getElementById("tabHomeBtn").addEventListener("click", goHome);
 document.getElementById("tabRecipesBtn").addEventListener("click", () => goToTab("recipes"));
 document.getElementById("tabPlanBtn").addEventListener("click", () => goToTab("mealplan"));
 document.getElementById("tabShopBtn").addEventListener("click", () => goToTab("shop"));
+document.getElementById("tabItemsBtn").addEventListener("click", () => goToTab("items"));
 document.getElementById("tabSettingsBtn").addEventListener("click", () => goToTab("settings"));
 window.addEventListener("popstate", () => {
   if (navStack.length > 1) {
