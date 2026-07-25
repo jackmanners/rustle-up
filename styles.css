@@ -61,6 +61,14 @@ main { padding: 14px 18px 70px; max-width: 720px; margin: 0 auto; }
   padding: 9px 12px; border: 1px solid var(--line); border-radius: 8px;
   font-size: 0.9rem; background: var(--card); color: var(--ink);
 }
+.search-wrap { position: relative; flex: 1; min-width: 140px; display: flex; }
+.search-wrap input[type="text"] { flex: 1; min-width: 0; padding-right: 28px; }
+.search-clear-btn {
+  position: absolute; right: 4px; top: 50%; transform: translateY(-50%);
+  width: 22px; height: 22px; border: none; background: transparent; color: var(--muted);
+  font-size: 0.85rem; line-height: 1; padding: 0; border-radius: 50%;
+}
+.search-clear-btn:active { background: var(--line); }
 .toolbar select {
   padding: 9px 10px; border: 1px solid var(--line); border-radius: 8px;
   background: var(--card); color: var(--ink); font-size: 0.85rem;
@@ -71,6 +79,10 @@ main { padding: 14px 18px 70px; max-width: 720px; margin: 0 auto; }
   padding: 14px 16px; margin-bottom: 10px; cursor: pointer;
 }
 .recipe-card h3 { margin: 0 0 4px; font-size: 1.05rem; font-family: Georgia, serif; }
+.stars { display:inline-flex; gap:1px; margin-bottom: 4px; }
+.star { font-size: 0.92rem; color: var(--line); line-height: 1; }
+.star.filled { color: #d9a441; }
+.stars.interactive .star { cursor: pointer; padding: 1px; }
 .recipe-meta { font-size: 0.78rem; color: var(--muted); margin-bottom: 6px; }
 .recipe-meta a { color: var(--leaf-dark); }
 .source-link {
@@ -275,4 +287,19 @@ input[type="file"] { display: none; }
 .undo-toast button {
   background:none; border:none; color:#bfe0c9; font-weight:700; font-size:0.85rem;
   text-decoration:underline; flex-shrink:0; padding:0;
+}
+
+/* Print view -- only reached via the recipe detail page's Print button.
+   Strips everything but the recipe itself so it reads well on paper: no
+   header/tabs, no buttons, no toast, no card chrome or interactive hints. */
+@media print {
+  header, .back-btn, .card-actions, .scale-row, #undoToast, .stars {
+    display: none !important;
+  }
+  body { background: #fff; color: #000; }
+  main { max-width: none; padding: 0; }
+  .detail-card { border: none; padding: 0; }
+  .recipe-meta, .tag { color: #444; }
+  .notes-box { background: none; border: 1px solid #ccc; }
+  a { color: #000; text-decoration: none; }
 }

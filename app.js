@@ -26,6 +26,7 @@ let db;
 let currentTab = "recipes";
 let currentSearch = "";
 let currentTagFilter = "";
+let currentSort = "title"; // title | rating | timesCooked | lastCooked
 let currentShopSearch = "";
 let pendingImport = null; // recipes parsed but awaiting serves confirmation
 let showCheckedItems = false;
@@ -954,6 +955,21 @@ async function setMealPlanServesOverride(entryId, value) {
   plan[idx] = upgraded;
   await saveMealPlan(plan);
 }
+const MEAL_PLAN_DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const MEAL_PLAN_DAY_NAMES = { Mon: "Monday", Tue: "Tuesday", Wed: "Wednesday", Thu: "Thursday", Fri: "Friday", Sat: "Saturday", Sun: "Sunday" };
+// An optional day tag per entry, so a meal plan can double as a rough
+// weekly schedule without forcing one -- entries with no day keep working
+// exactly as before, just grouped under "Unscheduled".
+async function setMealPlanEntryDay(entryId, day) {
+  const plan = await getMealPlan();
+  const idx = plan.findIndex(e => (typeof e === "string" ? e === entryId : e.id === entryId));
+  if (idx === -1) return;
+  const existing = plan[idx];
+  const upgraded = typeof existing === "string" ? { id: existing, recipeId: existing } : { ...existing };
+  upgraded.day = day || null;
+  plan[idx] = upgraded;
+  await saveMealPlan(plan);
+}
 async function getMealPlanEntries() {
   const plan = await getMealPlan();
   const recipes = await getAllRecipes();
@@ -965,10 +981,10 @@ async function getMealPlanEntries() {
       const baseServes = r.serves || detectDefaultServes(r) || null;
       return {
         id: entry.id, recipeId: r.id, title: r.title, ingredients: r.ingredients || [], recipe: r,
-        baseServes, servesOverride: entry.servesOverride || null
+        baseServes, servesOverride: entry.servesOverride || null, day: entry.day || null
       };
     }
-    return { id: entry.id, recipeId: null, title: entry.title || "", ingredients: entry.ingredients || [], recipe: null, baseServes: null, servesOverride: null };
+    return { id: entry.id, recipeId: null, title: entry.title || "", ingredients: entry.ingredients || [], recipe: null, baseServes: null, servesOverride: null, day: entry.day || null };
   }).filter(Boolean);
 }
 
@@ -985,10 +1001,16 @@ async function renderRecipes() {
 
   main.innerHTML = `
     <div class="toolbar">
-      <input type="text" id="searchInput" placeholder="Search recipes, tags, ingredients..." value="${escapeAttr(currentSearch)}">
+      ${searchBoxHtml("searchInput", "Search recipes, tags, ingredients...", currentSearch)}
       <select id="tagSelect">
         <option value="">All tags</option>
         ${tags.map(t => `<option value="${escapeAttr(t)}" ${t === currentTagFilter ? "selected" : ""}>${escapeHtml(t)}</option>`).join("")}
+      </select>
+      <select id="sortSelect">
+        <option value="title" ${currentSort === "title" ? "selected" : ""}>Title (A-Z)</option>
+        <option value="rating" ${currentSort === "rating" ? "selected" : ""}>Highest rated</option>
+        <option value="timesCooked" ${currentSort === "timesCooked" ? "selected" : ""}>Most cooked</option>
+        <option value="lastCooked" ${currentSort === "lastCooked" ? "selected" : ""}>Recently cooked</option>
       </select>
       <button class="secondary-btn" id="openAddBtn" title="Add a recipe">+ Add recipe</button>
     </div>
@@ -1001,8 +1023,13 @@ async function renderRecipes() {
     currentSearch = e.target.value;
     rerenderList();
   });
+  wireSearchClear("searchInput", () => { currentSearch = ""; rerenderList(); });
   document.getElementById("tagSelect").addEventListener("change", (e) => {
     currentTagFilter = e.target.value;
+    rerenderList();
+  });
+  document.getElementById("sortSelect").addEventListener("change", (e) => {
+    currentSort = e.target.value;
     rerenderList();
   });
   document.getElementById("openAddBtn").addEventListener("click", () => renderAdd());
@@ -1025,6 +1052,12 @@ function renderRecipeList(recipes, planIds) {
       const ra = searchRank(a, currentSearch), rb = searchRank(b, currentSearch);
       return ra !== rb ? ra - rb : a.title.localeCompare(b.title);
     });
+  } else if (currentSort === "rating") {
+    filtered.sort((a, b) => (b.rating || 0) - (a.rating || 0) || a.title.localeCompare(b.title));
+  } else if (currentSort === "timesCooked") {
+    filtered.sort((a, b) => (b.timesCooked || 0) - (a.timesCooked || 0) || a.title.localeCompare(b.title));
+  } else if (currentSort === "lastCooked") {
+    filtered.sort((a, b) => (b.lastCooked || "").localeCompare(a.lastCooked || "") || a.title.localeCompare(b.title));
   } else {
     filtered.sort((a, b) => a.title.localeCompare(b.title));
   }
@@ -1038,8 +1071,10 @@ function renderRecipeList(recipes, planIds) {
       const metaParts = [r.servesLabel, r.time].filter(Boolean).join(" &middot; ");
       html += `<div class="recipe-card" data-id="${escapeAttr(r.id)}">
         <h3>${escapeHtml(r.title)}</h3>
+        ${starsHtml(r.rating)}
         <div class="recipe-meta">${metaParts}</div>
         ${sourceLineHtml(r)}
+        ${cookedInfoHtml(r)}
         <div class="tag-row">${(r.tags || []).map(t => `<span class="tag">${escapeHtml(t)}</span>`).join("")}</div>
         <div class="card-actions">
           <button class="mini-btn ${inPlan ? "selected" : ""}" data-action="plan-toggle" data-id="${escapeAttr(r.id)}">${inPlan ? "✓ In meal plan" : "+ Add to meal plan"}</button>
@@ -1090,6 +1125,55 @@ function renderRecipeList(recipes, planIds) {
   });
 }
 
+// Renders a 1-5 star rating. Interactive mode (recipe detail page) wires
+// clicks to setRecipeRating; clicking the currently-set star clears it.
+// Non-interactive mode (list cards) is just a quiet visual summary.
+function starsHtml(rating, opts) {
+  opts = opts || {};
+  const r = rating || 0;
+  const cls = opts.interactive ? "stars interactive" : "stars";
+  let html = `<span class="${cls}" ${opts.recipeId ? `data-recipe-id="${escapeAttr(opts.recipeId)}"` : ""}>`;
+  for (let i = 1; i <= 5; i++) {
+    html += `<span class="star ${i <= r ? "filled" : ""}" data-value="${i}">${i <= r ? "★" : "☆"}</span>`;
+  }
+  html += `</span>`;
+  return html;
+}
+function wireStars(container) {
+  container.querySelectorAll(".stars.interactive").forEach(starsEl => {
+    starsEl.querySelectorAll(".star").forEach(starEl => {
+      starEl.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        const newRating = await setRecipeRating(starsEl.dataset.recipeId, Number(starEl.dataset.value));
+        starsEl.outerHTML = starsHtml(newRating, { interactive: true, recipeId: starsEl.dataset.recipeId });
+        wireStars(container);
+      });
+    });
+  });
+}
+async function setRecipeRating(id, rating) {
+  const recipes = await getAllRecipes();
+  const r = recipes.find(x => x.id === id);
+  if (!r) return 0;
+  r.rating = r.rating === rating ? 0 : rating;
+  await putRecipe(r);
+  return r.rating;
+}
+async function markRecipeCooked(id) {
+  const recipes = await getAllRecipes();
+  const r = recipes.find(x => x.id === id);
+  if (!r) return null;
+  r.timesCooked = (r.timesCooked || 0) + 1;
+  r.lastCooked = new Date().toISOString().slice(0, 10);
+  await putRecipe(r);
+  return r;
+}
+function cookedInfoHtml(r) {
+  if (!r.timesCooked) return "";
+  const times = `Cooked ${r.timesCooked}x`;
+  return `<div class="recipe-meta">${times}${r.lastCooked ? ` &middot; last ${escapeHtml(r.lastCooked)}` : ""}</div>`;
+}
+
 function sourceLineHtml(r) {
   if (!r.source && !r.sourceUrl) return "";
   if (r.sourceUrl) {
@@ -1110,10 +1194,12 @@ async function renderDetail(id) {
     <button class="back-btn" id="backBtn">&larr; Back to recipes</button>
     <div class="detail-card">
       <h2>${escapeHtml(r.title)}</h2>
+      ${starsHtml(r.rating, { interactive: true, recipeId: r.id })}
       <div class="recipe-meta">${[r.servesLabel, r.time].filter(Boolean).map(escapeHtml).join(" &middot; ")}</div>
       ${r.source || r.sourceUrl ? `<div>${r.sourceUrl
         ? `<a class="source-link" href="${escapeAttr(r.sourceUrl)}" target="_blank" rel="noopener">${escapeHtml(r.source || "View source")} ↗</a>`
         : `<div class="recipe-meta">${escapeHtml(r.source)}</div>`}</div>` : ""}
+      <div id="cookedInfoArea">${cookedInfoHtml(r)}</div>
       <div class="tag-row">${(r.tags || []).map(t => `<span class="tag">${escapeHtml(t)}</span>`).join("")}</div>
 
       <div class="section-label">Ingredients</div>
@@ -1130,11 +1216,25 @@ async function renderDetail(id) {
 
       <div class="card-actions">
         <button class="mini-btn ${inPlan ? "selected" : ""}" id="planToggleBtn">${inPlan ? "✓ In meal plan" : "+ Add to meal plan"}</button>
+        <button class="mini-btn" id="markCookedBtn">Mark as cooked</button>
+        <button class="mini-btn" id="printBtn">Print</button>
         <button class="mini-btn" id="editBtn">Edit recipe</button>
       </div>
     </div>
   `;
+  wireStars(main);
   document.getElementById("backBtn").addEventListener("click", renderRecipes);
+  document.getElementById("markCookedBtn").addEventListener("click", async () => {
+    const before = { timesCooked: r.timesCooked || 0, lastCooked: r.lastCooked || null };
+    const updated = await markRecipeCooked(r.id);
+    document.getElementById("cookedInfoArea").innerHTML = cookedInfoHtml(updated);
+    showToast(`Marked "${r.title}" as cooked.`, async () => {
+      const recipes = await getAllRecipes();
+      const rec = recipes.find(x => x.id === r.id);
+      if (rec) { rec.timesCooked = before.timesCooked; rec.lastCooked = before.lastCooked; await putRecipe(rec); }
+    }, () => renderDetail(r.id));
+  });
+  document.getElementById("printBtn").addEventListener("click", () => window.print());
   document.getElementById("planToggleBtn").addEventListener("click", async () => {
     if (inPlan) {
       const planBefore = await getMealPlan();
@@ -1330,7 +1430,15 @@ async function addComparisonLineToShoppingList(line) {
 async function renderMealPlan() {
   const main = document.getElementById("main");
   const entries = await getMealPlanEntries();
-  entries.sort((a, b) => a.title.localeCompare(b.title));
+  const anyDayAssigned = entries.some(en => en.day);
+  entries.sort((a, b) => {
+    if (anyDayAssigned) {
+      const da = a.day ? MEAL_PLAN_DAYS.indexOf(a.day) : 99;
+      const db = b.day ? MEAL_PLAN_DAYS.indexOf(b.day) : 99;
+      if (da !== db) return da - db;
+    }
+    return a.title.localeCompare(b.title);
+  });
 
   let html = `<div id="mealNotesCard"></div>
     <div class="btn-row" style="margin-bottom:14px;">
@@ -1340,12 +1448,22 @@ async function renderMealPlan() {
   if (entries.length === 0) {
     html += `<div class="empty-msg">Nothing planned yet -- add a recipe from Recipes, or add manually above.</div>`;
   } else {
+    let lastDay;
     entries.forEach(en => {
+      if (anyDayAssigned && en.day !== lastDay) {
+        lastDay = en.day;
+        html += `<div class="section-label">${en.day ? MEAL_PLAN_DAY_NAMES[en.day] : "Unscheduled"}</div>`;
+      }
       const metaParts = en.recipe ? [en.recipe.servesLabel, en.recipe.time].filter(Boolean).join(" &middot; ") : "Manual entry";
+      const dayOptions = `<option value="">No day</option>` + MEAL_PLAN_DAYS.map(d => `<option value="${d}" ${en.day === d ? "selected" : ""}>${MEAL_PLAN_DAY_NAMES[d]}</option>`).join("");
       html += `<div class="recipe-card" data-id="${escapeAttr(en.id)}" data-recipe-id="${escapeAttr(en.recipeId || "")}" style="${en.recipe ? "" : "cursor:default;"}">
         <h3>${escapeHtml(en.title)}</h3>
         <div class="recipe-meta">${metaParts}</div>
         ${en.recipe ? `<div class="tag-row">${(en.recipe.tags || []).map(t => `<span class="tag">${escapeHtml(t)}</span>`).join("")}</div>` : ""}
+        <div class="scale-row">
+          <label for="day-${escapeAttr(en.id)}">Day</label>
+          <select id="day-${escapeAttr(en.id)}" class="meal-day-select" data-entry-id="${escapeAttr(en.id)}">${dayOptions}</select>
+        </div>
         ${en.baseServes ? `<div class="scale-row">
           <label for="serves-${escapeAttr(en.id)}">Cooking for</label>
           <input type="number" min="1" class="meal-serves-input" id="serves-${escapeAttr(en.id)}" data-entry-id="${escapeAttr(en.id)}" data-base-serves="${en.baseServes}" value="${en.servesOverride || en.baseServes}">
@@ -1363,6 +1481,13 @@ async function renderMealPlan() {
   main.innerHTML = html;
   await renderMealPlanNotesCard();
   await renderMealPlanIngredients(entries);
+  main.querySelectorAll(".meal-day-select").forEach(select => {
+    select.addEventListener("click", (e) => e.stopPropagation());
+    select.addEventListener("change", async () => {
+      await setMealPlanEntryDay(select.dataset.entryId, select.value);
+      renderMealPlan();
+    });
+  });
   main.querySelectorAll(".meal-serves-input").forEach(input => {
     input.addEventListener("click", (e) => e.stopPropagation());
     input.addEventListener("keydown", (e) => { if (e.key === "Enter") input.blur(); });
@@ -1590,6 +1715,10 @@ function handleShopListFileImport(e) {
     }
     e.target.value = "";
   };
+  reader.onerror = () => {
+    showToast("Couldn't read that file -- try again.", null, null);
+    e.target.value = "";
+  };
   reader.readAsText(file);
 }
 
@@ -1622,7 +1751,7 @@ async function renderShoppingList() {
       ${catalog.map(e => `<option value="${escapeAttr(e.name)}">`).join("")}
     </datalist>
     <div class="toolbar">
-      <input type="text" id="shopSearchInput" placeholder="Search your list..." value="${escapeAttr(currentShopSearch)}">
+      ${searchBoxHtml("shopSearchInput", "Search your list...", currentShopSearch)}
     </div>
     <div class="btn-row" style="margin-bottom:14px;">
       <button class="secondary-btn" id="pasteListBtn">Paste a list</button>
@@ -1650,6 +1779,7 @@ async function renderShoppingList() {
     currentShopSearch = e.target.value;
     renderShopListArea();
   });
+  wireSearchClear("shopSearchInput", () => { currentShopSearch = ""; renderShopListArea(); });
 
   renderShopListArea();
 }
@@ -1925,6 +2055,24 @@ function startEditItem(el, id) {
 
 const UNIT_PRESETS = ["g", "kg", "ml", "l", "bunch", "punnet", "block", "dozen", "pack", "slice"];
 let currentItemSearch = "";
+let currentItemTagFilter = "";
+
+// Free-text tags (dairy, frozen, vegan, pantry, gluten-free...) let an item
+// belong to more than one category at once, which a single dropdown
+// category never could. "Staple" stays its own dedicated flag -- it drives
+// the shopping list's separate Staples section and its own saved order --
+// but is folded into this same filter dropdown as a convenience so it
+// reads as one more tag rather than a second, inconsistent system.
+function allItemTags(catalog) {
+  const set = new Set();
+  catalog.forEach(e => (e.tags || []).forEach(t => set.add(t)));
+  return [...set].sort();
+}
+function matchesItemTagFilter(entry) {
+  if (!currentItemTagFilter) return true;
+  if (currentItemTagFilter === "__staple") return !!entry.staple;
+  return (entry.tags || []).includes(currentItemTagFilter);
+}
 
 function renderItemCatalogRow(entry) {
   return `
@@ -1936,6 +2084,7 @@ function renderItemCatalogRow(entry) {
       <label class="staple-check"><input type="checkbox" class="ing-staple" ${entry.staple ? "checked" : ""}> Staple</label>
       <label class="staple-check" title="Automatically add this to every new shopping list"><input type="checkbox" class="ing-default" ${entry.defaultItem ? "checked" : ""}> Auto-add</label>
       <input type="text" class="ing-aliases" value="${escapeAttr((entry.aliases || []).join(", "))}" placeholder="aliases">
+      <input type="text" class="ing-tags" value="${escapeAttr((entry.tags || []).join(", "))}" placeholder="tags (dairy, frozen...)">
       <button class="icon-btn" data-action="delete-ing">✕</button>
     </div>`;
 }
@@ -1950,6 +2099,7 @@ function renderNewItemRow() {
       <label class="staple-check"><input type="checkbox" id="newIngStaple"> Staple</label>
       <label class="staple-check" title="Automatically add this to every new shopping list"><input type="checkbox" id="newIngDefault"> Auto-add</label>
       <input type="text" id="newIngAliases" placeholder="aliases">
+      <input type="text" id="newIngTags" placeholder="tags (dairy, frozen...)">
       <button class="secondary-btn" id="addIngBtn">Add</button>
     </div>
   `;
@@ -1970,12 +2120,14 @@ function wireItemCatalogEvents() {
       entry.staple = row.querySelector(".ing-staple").checked;
       entry.defaultItem = row.querySelector(".ing-default").checked;
       entry.aliases = row.querySelector(".ing-aliases").value.split(",").map(s => s.trim()).filter(Boolean);
+      entry.tags = row.querySelector(".ing-tags").value.split(",").map(s => s.trim().toLowerCase()).filter(Boolean);
       await saveItemCatalog(catalog);
     };
     row.querySelector(".ing-name").addEventListener("blur", save);
     row.querySelector(".ing-step").addEventListener("blur", save);
     row.querySelector(".ing-defaultqty").addEventListener("blur", save);
     row.querySelector(".ing-aliases").addEventListener("blur", save);
+    row.querySelector(".ing-tags").addEventListener("blur", save);
     row.querySelector(".ing-unit").addEventListener("blur", save);
     row.querySelector(".ing-staple").addEventListener("change", save);
     row.querySelector(".ing-default").addEventListener("change", save);
@@ -2002,9 +2154,10 @@ function wireItemCatalogEvents() {
     const defaultItem = document.getElementById("newIngDefault").checked;
     const aliases = document.getElementById("newIngAliases").value.split(",").map(s => s.trim()).filter(Boolean);
     if (aliases.length === 0) aliases.push(name.toLowerCase());
+    const tags = document.getElementById("newIngTags").value.split(",").map(s => s.trim().toLowerCase()).filter(Boolean);
     const catalog = await getItemCatalog();
     const suggestion = findFuzzyCatalogSuggestion(name, catalog);
-    const newEntry = { id: slugify(name) + "-" + Date.now().toString(36).slice(-4), name, unit, step, defaultQty, staple, defaultItem, aliases };
+    const newEntry = { id: slugify(name) + "-" + Date.now().toString(36).slice(-4), name, unit, step, defaultQty, staple, defaultItem, aliases, tags };
     catalog.push(newEntry);
     await saveItemCatalog(catalog);
     renderItemCatalogRows();
@@ -2021,9 +2174,10 @@ async function renderItemCatalogRows() {
   if (!container) return;
   const catalog = await getItemCatalog();
   const term = currentItemSearch.trim().toLowerCase();
-  const filtered = term
-    ? catalog.filter(e => e.name.toLowerCase().includes(term) || (e.aliases || []).some(a => a.toLowerCase().includes(term)))
-    : catalog;
+  const filtered = catalog.filter(e => {
+    if (!matchesItemTagFilter(e)) return false;
+    return !term || e.name.toLowerCase().includes(term) || (e.aliases || []).some(a => a.toLowerCase().includes(term));
+  });
   const rows = filtered.slice().sort((a, b) => a.name.localeCompare(b.name)).map(renderItemCatalogRow).join("");
   container.innerHTML = `
     <div id="ingRows">${rows || `<div class="empty-msg">${term ? "No matches." : "Nothing yet -- add one below."}</div>`}</div>
@@ -2095,12 +2249,19 @@ async function renderDuplicateScan() {
 
 async function renderItemCatalog() {
   const main = document.getElementById("main");
+  const catalog = await getItemCatalog();
+  const tags = allItemTags(catalog);
   main.innerHTML = `
     <button class="back-btn" id="ingBackBtn">&larr; Back to shopping list</button>
     <div class="detail-card">
       <h2>Items</h2>
       <div class="toolbar">
-        <input type="text" id="itemCatalogSearch" placeholder="Search items..." value="${escapeAttr(currentItemSearch)}">
+        ${searchBoxHtml("itemCatalogSearch", "Search items...", currentItemSearch)}
+        <select id="itemTagFilter">
+          <option value="">All tags</option>
+          <option value="__staple" ${currentItemTagFilter === "__staple" ? "selected" : ""}>Staple</option>
+          ${tags.map(t => `<option value="${escapeAttr(t)}" ${t === currentItemTagFilter ? "selected" : ""}>${escapeHtml(t)}</option>`).join("")}
+        </select>
         <button class="secondary-btn" id="findDupesBtn">Find duplicates</button>
       </div>
       <div id="dupResultsArea"></div>
@@ -2113,6 +2274,11 @@ async function renderItemCatalog() {
   document.getElementById("ingBackBtn").addEventListener("click", () => setTab("shop"));
   document.getElementById("itemCatalogSearch").addEventListener("input", (e) => {
     currentItemSearch = e.target.value;
+    renderItemCatalogRows();
+  });
+  wireSearchClear("itemCatalogSearch", () => { currentItemSearch = ""; renderItemCatalogRows(); });
+  document.getElementById("itemTagFilter").addEventListener("change", (e) => {
+    currentItemTagFilter = e.target.value;
     renderItemCatalogRows();
   });
   document.getElementById("findDupesBtn").addEventListener("click", renderDuplicateScan);
@@ -2246,6 +2412,7 @@ function renderRecipeForm(recipe) {
         <div class="form-field"><label>Serves</label><input type="number" min="1" id="fServes" value="${defaultServes}"></div>
         <div class="form-field"><label>Time</label><input type="text" id="fTime" value="${escapeAttr(r.time || "")}" placeholder="e.g. 20 min"></div>
       </div>
+      <div class="form-field"><label>Rating</label><div id="fRatingStars">${starsHtml(r.rating)}</div></div>
       <div class="form-field"><label>Tags (comma separated)</label><input type="text" id="fTags" value="${escapeAttr((r.tags || []).join(", "))}"></div>
       <div class="form-field"><label>Ingredients (one per line)</label><textarea id="fIngredients">${escapeHtml((r.ingredients || []).join("\n"))}</textarea></div>
       <div id="unmatchedHint"></div>
@@ -2258,6 +2425,18 @@ function renderRecipeForm(recipe) {
   document.getElementById("formBackBtn").addEventListener("click", () => {
     if (isEdit) renderDetail(r.id); else renderAdd();
   });
+  let formRating = r.rating || 0;
+  function wireFormStars() {
+    document.querySelectorAll("#fRatingStars .star").forEach(el => {
+      el.addEventListener("click", () => {
+        const v = Number(el.dataset.value);
+        formRating = formRating === v ? 0 : v;
+        document.getElementById("fRatingStars").innerHTML = starsHtml(formRating);
+        wireFormStars();
+      });
+    });
+  }
+  wireFormStars();
   const ingredientsField = document.getElementById("fIngredients");
   let unmatchedDebounce = null;
   ingredientsField.addEventListener("input", () => {
@@ -2286,6 +2465,7 @@ function renderRecipeForm(recipe) {
     const savedRecipe = {
       id: isEdit ? r.id : slugify(title) + "-" + Date.now().toString(36).slice(-4),
       title, source, sourceUrl, tags, serves, servesLabel, time, ingredients, method, notes,
+      rating: formRating, timesCooked: r.timesCooked || 0, lastCooked: r.lastCooked || null,
       dateAdded: r.dateAdded || new Date().toISOString().slice(0, 10)
     };
     await putRecipe(savedRecipe);
@@ -2516,10 +2696,35 @@ function handleFileImport(e) {
       document.getElementById("importStatus").innerHTML = `<div class="status-msg status-err">Import failed: ${escapeHtml(err.message)}</div>`;
     }
   };
+  reader.onerror = () => {
+    document.getElementById("importStatus").innerHTML = `<div class="status-msg status-err">Couldn't read that file -- try again.</div>`;
+  };
   reader.readAsText(file);
 }
 
 /* ---------- Utilities ---------- */
+
+// Shared markup + wiring for the search boxes in Recipes, Shopping list,
+// and Item Manager -- adds a small "x" to clear the field instead of
+// requiring backspace, which matters more as those lists grow.
+function searchBoxHtml(id, placeholder, value) {
+  return `<div class="search-wrap">
+    <input type="text" id="${escapeAttr(id)}" placeholder="${escapeAttr(placeholder)}" value="${escapeAttr(value)}">
+    <button type="button" class="search-clear-btn" data-clear="${escapeAttr(id)}" style="${value ? "" : "display:none;"}" title="Clear search">✕</button>
+  </div>`;
+}
+function wireSearchClear(inputId, onChange) {
+  const input = document.getElementById(inputId);
+  const btn = document.querySelector(`[data-clear="${inputId}"]`);
+  if (!input || !btn) return;
+  input.addEventListener("input", () => { btn.style.display = input.value ? "" : "none"; });
+  btn.addEventListener("click", () => {
+    input.value = "";
+    btn.style.display = "none";
+    input.focus();
+    onChange();
+  });
+}
 
 function escapeHtml(str) {
   return String(str).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -2552,11 +2757,33 @@ document.getElementById("undoToastBtn").addEventListener("click", async () => {
   if (refreshFn) refreshFn();
 });
 
+// Anything that reaches here slipped past a more specific try/catch --
+// most button handlers don't wrap their own IndexedDB calls, so without
+// this a failed save (quota exceeded, storage blocked, etc.) would fail
+// completely silently instead of at least telling the user something
+// didn't stick.
+window.addEventListener("unhandledrejection", (e) => {
+  console.error("Unhandled error:", e.reason);
+  showToast("Something went wrong and that last action may not have saved. Try again, or reload the app.", null, null, "Dismiss", 9000);
+});
+
 (async () => {
-  db = await openDB();
-  await seedIfEmpty();
-  await seedItemCatalogIfEmpty();
-  setTab("recipes");
+  try {
+    db = await openDB();
+    await seedIfEmpty();
+    await seedItemCatalogIfEmpty();
+    setTab("recipes");
+  } catch (err) {
+    console.error("Failed to start Rustle Up:", err);
+    document.getElementById("main").innerHTML = `
+      <div class="empty-msg" style="padding-top:60px;">
+        <strong>Couldn't load your data.</strong><br><br>
+        This usually means private/incognito browsing, or storage being blocked or full,
+        is preventing this device from using its local database.<br><br>
+        Try a normal browser window, free up some storage, or check your browser's
+        site-data settings for this page, then reload.
+      </div>`;
+  }
 })();
 
 if ("serviceWorker" in navigator) {
