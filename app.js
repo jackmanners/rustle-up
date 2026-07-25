@@ -126,15 +126,17 @@ let toastUndoFn = null;
 let toastRefreshFn = null;
 let toastTimer = null;
 
-function showToast(message, undoFn, refreshFn) {
+function showToast(message, undoFn, refreshFn, actionLabel, durationMs) {
   clearTimeout(toastTimer);
   toastUndoFn = undoFn || null;
   toastRefreshFn = refreshFn || null;
   const toast = document.getElementById("undoToast");
   document.getElementById("undoToastMsg").textContent = message;
-  document.getElementById("undoToastBtn").style.display = undoFn ? "" : "none";
+  const btn = document.getElementById("undoToastBtn");
+  btn.style.display = undoFn ? "" : "none";
+  btn.textContent = actionLabel || "Undo";
   toast.classList.remove("hidden");
-  toastTimer = setTimeout(hideToast, 7000);
+  toastTimer = setTimeout(hideToast, durationMs || 7000);
 }
 
 function hideToast() {
@@ -275,6 +277,28 @@ function parseIngredient(raw) {
     return { amount, unit: null, name: extracted.name, parenAmount: extracted.parenAmount, parenUnit: extracted.parenUnit };
   }
 
+  // Quantity can trail the name too, like typing a task into TickTick --
+  // "flour 500g", "onions x2", "milk 2" all read naturally that way.
+
+  // "name x N" e.g. "milk x2", "eggs x 6"
+  m = text.match(/^(.+?)\s*[x×]\s*(\d+(?:\.\d+)?|\d+\/\d+|½|¼|¾|⅓|⅔)$/i);
+  if (m) {
+    const name = cleanIngredientName(m[1].replace(/,\s*$/, ""));
+    return { amount: parseQtyToken(m[2]), unit: null, name, parenAmount: null, parenUnit: null };
+  }
+
+  // "name N unit" e.g. "flour 500g", "curry paste 3 tbsp"
+  m = text.match(/^(.+?),?\s+(\d+(?:\.\d+)?|\d+\/\d+|½|¼|¾|⅓|⅔)\s*(g|kg|ml|l|cm|tsp|tbsp|teaspoons?|tablespoons?|cloves?|heads?|bunche?s?|tins?|cans?)$/i);
+  if (m) {
+    return { amount: parseQtyToken(m[2]), unit: normalizeUnit(m[3]), name: cleanIngredientName(m[1]), parenAmount: null, parenUnit: null };
+  }
+
+  // "name N" e.g. "onions 2", "apples 3"
+  m = text.match(/^(.+?),?\s+(\d+(?:\.\d+)?|\d+\/\d+|½|¼|¾|⅓|⅔)$/);
+  if (m) {
+    return { amount: parseQtyToken(m[2]), unit: null, name: cleanIngredientName(m[1]), parenAmount: null, parenUnit: null };
+  }
+
   const extracted = extractParenWeight(cleanIngredientName(text));
   return { amount: null, unit: null, name: extracted.name, parenAmount: extracted.parenAmount, parenUnit: extracted.parenUnit };
 }
@@ -340,10 +364,47 @@ function buildMergeKey(catalogEntry, name) {
 // Auto-creates a catalog entry the first time a genuinely new item name is
 // added to the shopping list, so it's available for autocomplete and
 // reference-order matching next time.
+// matchCatalog only catches the case where the typed/parsed text is the
+// *fuller* phrase (it contains a known alias as a substring). It can't
+// catch the opposite -- a short personal shorthand like "bronion" for
+// "Brown onion" -- since the alias is longer than what was typed. This
+// looks for the typed word's letters appearing *in order* (not
+// necessarily together) inside a longer existing name/alias, which is
+// exactly the shape of a contraction like spronion/bronion/ronion for
+// spring/brown/red onion.
+function normalizeForFuzzy(s) { return s.toLowerCase().replace(/[^a-z]/g, ""); }
+
+function isSubsequence(needle, haystack) {
+  let i = 0;
+  for (let j = 0; j < haystack.length && i < needle.length; j++) {
+    if (haystack[j] === needle[i]) i++;
+  }
+  return i === needle.length;
+}
+
+function findFuzzyCatalogSuggestion(name, catalog) {
+  const needle = normalizeForFuzzy(name);
+  if (needle.length < 3) return null;
+  let best = null, bestRatio = 0;
+  catalog.forEach(entry => {
+    // Only test against the canonical display name, never against other
+    // aliases -- once a contraction like "bronion" is stored as an alias
+    // it's itself short and would otherwise attract *other* unrelated
+    // contractions (e.g. "ronion") purely by being similarly short.
+    const hay = normalizeForFuzzy(entry.name);
+    if (hay.length <= needle.length) return; // only a "shorthand for something longer" suggestion
+    if (!isSubsequence(needle, hay)) return;
+    const ratio = needle.length / hay.length;
+    if (ratio >= 0.35 && ratio > bestRatio) { bestRatio = ratio; best = entry; }
+  });
+  return best;
+}
+
 async function ensureCatalogEntryForName(name, unit, defaultQty) {
   const catalog = await getItemCatalog();
   const existing = matchCatalog(name, catalog);
-  if (existing) return existing;
+  if (existing) return { entry: existing, suggestion: null };
+  const suggestion = findFuzzyCatalogSuggestion(name, catalog);
   const entry = {
     id: slugify(name) + "-" + Date.now().toString(36).slice(-4),
     name, aliases: [name.toLowerCase()], staple: false,
@@ -351,7 +412,51 @@ async function ensureCatalogEntryForName(name, unit, defaultQty) {
   };
   catalog.push(entry);
   await saveItemCatalog(catalog);
-  return entry;
+  return { entry, suggestion };
+}
+
+// Folds a just-created catalog entry into an existing one the user has
+// confirmed is really the same thing: the typed word becomes a new alias
+// on the target, the redundant entry is removed, and any shopping items
+// that were pointing at it get repointed to the canonical item.
+async function mergeNewEntryIntoExisting(newEntry, targetId) {
+  const catalog = await getItemCatalog();
+  const target = catalog.find(e => e.id === targetId);
+  if (!target) return;
+  const alias = (newEntry.aliases && newEntry.aliases[0]) || newEntry.name.toLowerCase();
+  if (!target.aliases.includes(alias)) target.aliases.push(alias);
+  await saveItemCatalog(catalog.filter(e => e.id !== newEntry.id));
+
+  const items = await getShopItems();
+  items.filter(i => i.catalogId === newEntry.id).forEach(i => {
+    i.catalogId = target.id;
+    i.mergeKey = "cat:" + target.id;
+    i.name = target.name;
+    i.staple = !!target.staple;
+  });
+  await saveShopItems(items);
+  refreshItemSuggestions();
+}
+
+function offerAliasMerge(newEntry, suggestion, refreshFn) {
+  showToast(
+    `Is "${newEntry.name}" the same as "${suggestion.name}"?`,
+    async () => {
+      const catalogBefore = await getItemCatalog();
+      const itemsBefore = await getShopItems();
+      await mergeNewEntryIntoExisting(newEntry, suggestion.id);
+      showToast(`Merged "${newEntry.name}" into "${suggestion.name}".`, async () => {
+        await saveItemCatalog(catalogBefore);
+        await saveShopItems(itemsBefore);
+        refreshItemSuggestions();
+        if (refreshFn) refreshFn();
+      }, refreshFn);
+      if (refreshFn) refreshFn();
+    },
+    refreshFn,
+    "Merge",
+    9000
+  );
 }
 
 function shopItemQty(item) { return item.quantity != null ? item.quantity : (item.amount != null ? item.amount : 1); }
@@ -1104,24 +1209,34 @@ async function renderMealPlanIngredients(entries) {
   container.querySelectorAll('[data-action="add-compare"]').forEach(btn => {
     btn.addEventListener("click", async () => {
       const line = merged.find(m => (m.catalogId || m.mergeKey) === btn.dataset.key);
-      if (line) await addComparisonLineToShoppingList(line);
+      if (!line) return;
+      const result = await addComparisonLineToShoppingList(line);
       renderMealPlanIngredients(entries);
+      if (result.suggestion) offerAliasMerge(result.catalogEntry, result.suggestion, () => renderMealPlanIngredients(entries));
     });
   });
   const addAllBtn = document.getElementById("addAllIngredientsBtn");
   if (addAllBtn) addAllBtn.addEventListener("click", async () => {
     const toAdd = merged.filter(m => !onListKeys.has(m.catalogId || m.mergeKey));
-    for (const line of toAdd) await addComparisonLineToShoppingList(line);
-    showToast(`Added ${toAdd.length} item(s) to your shopping list.`, null, null);
+    let lastSuggestion = null;
+    for (const line of toAdd) {
+      const result = await addComparisonLineToShoppingList(line);
+      if (result.suggestion) lastSuggestion = result;
+    }
     renderMealPlanIngredients(entries);
+    if (lastSuggestion) offerAliasMerge(lastSuggestion.catalogEntry, lastSuggestion.suggestion, () => renderMealPlanIngredients(entries));
+    else showToast(`Added ${toAdd.length} item(s) to your shopping list.`, null, null);
   });
 }
 
 async function addComparisonLineToShoppingList(line) {
   const catalog = await getItemCatalog();
   let catalogEntry = line.catalogId ? catalog.find(c => c.id === line.catalogId) : null;
+  let suggestion = null;
   if (!catalogEntry) {
-    catalogEntry = await ensureCatalogEntryForName(line.name, line.unit, line.amount || 1);
+    const result = await ensureCatalogEntryForName(line.name, line.unit, line.amount || 1);
+    catalogEntry = result.entry;
+    suggestion = result.suggestion;
     refreshItemSuggestions();
   }
   const items = await getShopItems();
@@ -1140,6 +1255,7 @@ async function addComparisonLineToShoppingList(line) {
     await insertItemByReferenceOrder(items, item);
   }
   await saveShopItems(items);
+  return { catalogEntry, suggestion };
 }
 
 async function renderMealPlan() {
@@ -1206,15 +1322,18 @@ async function refreshItemSuggestions() {
   datalist.innerHTML = catalog.map(e => `<option value="${escapeAttr(e.name)}">`).join("");
 }
 
-async function addManualItem() {
-  const input = document.getElementById("newItemInput");
-  const raw = input.value.trim();
-  if (!raw) return;
+// Shared by the manual add box and the paste-a-list ingester: parses one
+// line of free text, matches/creates a catalog entry (with fuzzy alias
+// suggestion), and merges it into the shopping list.
+async function addTextToShoppingList(raw) {
   const parsed = parseIngredient(raw);
   const catalog = await getItemCatalog();
   let catalogEntry = matchCatalog(parsed.name, catalog);
+  let suggestion = null;
   if (!catalogEntry) {
-    catalogEntry = await ensureCatalogEntryForName(parsed.name, parsed.unit, parsed.amount || 1);
+    const result = await ensureCatalogEntryForName(parsed.name, parsed.unit, parsed.amount || 1);
+    catalogEntry = result.entry;
+    suggestion = result.suggestion;
     refreshItemSuggestions();
   }
   const items = await getShopItems();
@@ -1234,7 +1353,74 @@ async function addManualItem() {
     await insertItemByReferenceOrder(items, item);
   }
   await saveShopItems(items);
+  return { catalogEntry, suggestion };
+}
+
+async function addManualItem() {
+  const input = document.getElementById("newItemInput");
+  const raw = input.value.trim();
+  if (!raw) return;
+  const result = await addTextToShoppingList(raw);
   input.value = "";
+  renderShopListArea();
+  if (result.suggestion) offerAliasMerge(result.catalogEntry, result.suggestion, renderShopListArea);
+}
+
+// Strips common list-marker prefixes (dashes, bullets, checkboxes,
+// numbering) so a pasted list from anywhere (notes app, recipe site,
+// another app's export) ingests cleanly line by line.
+function stripListMarker(line) {
+  return line.replace(/^\s*(?:[-*•‣▪◦○●·]|\[\s?[xX]?\s?\]|\d+[.)]|☐|☑|✓|✔)+\s*/, "").trim();
+}
+
+function renderPasteList() {
+  const main = document.getElementById("main");
+  main.innerHTML = `
+    <button class="back-btn" id="pasteBackBtn">&larr; Back to shopping list</button>
+    <div class="detail-card">
+      <h2>Paste a list</h2>
+      <p style="font-size:0.85rem;color:var(--muted);margin:0 0 10px;">One item per line. Dashes, bullets, checkboxes and numbering are stripped automatically.</p>
+      <textarea id="pasteListInput" placeholder="- 2 onions&#10;500g flour&#10;[ ] Milk"></textarea>
+      <button class="primary-btn" id="pasteListAddBtn">Add to shopping list</button>
+    </div>
+  `;
+  document.getElementById("pasteBackBtn").addEventListener("click", () => setTab("shop"));
+  document.getElementById("pasteListAddBtn").addEventListener("click", async () => {
+    const raw = document.getElementById("pasteListInput").value;
+    const lines = raw.split("\n").map(stripListMarker).filter(Boolean);
+    if (lines.length === 0) return;
+    const before = await getShopItems();
+    let lastSuggestion = null;
+    for (const line of lines) {
+      const result = await addTextToShoppingList(line);
+      if (result.suggestion) lastSuggestion = result;
+    }
+    setTab("shop");
+    if (lastSuggestion) {
+      offerAliasMerge(lastSuggestion.catalogEntry, lastSuggestion.suggestion, renderShopListArea);
+    } else {
+      showToast(`Added ${lines.length} item(s) to your shopping list.`, async () => { await saveShopItems(before); }, renderShopListArea);
+    }
+  });
+}
+
+// Clears the current list and repopulates it with any items flagged
+// "Default" in the Item Manager, for starting a fresh trip.
+async function startNewShoppingList() {
+  const before = await getShopItems();
+  const catalog = await getItemCatalog();
+  const defaults = catalog.filter(c => c.defaultItem);
+  const items = [];
+  for (const entry of defaults) {
+    const item = {
+      id: genId(), catalogId: entry.id, mergeKey: "cat:" + entry.id, name: entry.name,
+      quantity: entry.defaultQty || 1, unit: entry.unit || "", step: entry.step || stepForUnit(entry.unit || ""),
+      checked: false, staple: !!entry.staple, meals: []
+    };
+    await insertItemByReferenceOrder(items, item);
+  }
+  await saveShopItems(items);
+  showToast(`Started a new list${defaults.length ? ` with ${defaults.length} default item(s)` : ""}.`, async () => { await saveShopItems(before); }, renderShopListArea);
   renderShopListArea();
 }
 
@@ -1331,6 +1517,8 @@ async function renderShoppingList() {
       <input type="text" id="shopSearchInput" placeholder="Search your list..." value="${escapeAttr(currentShopSearch)}">
     </div>
     <div class="btn-row" style="margin-bottom:14px;">
+      <button class="secondary-btn" id="pasteListBtn">Paste a list</button>
+      <button class="secondary-btn" id="newListBtn">New list</button>
       <button class="secondary-btn" id="manageIngredientsBtn">Manage items</button>
       <button class="secondary-btn" id="exportShopBtn">Export list</button>
       <button class="secondary-btn" id="importShopBtn">Import list</button>
@@ -1344,6 +1532,8 @@ async function renderShoppingList() {
   document.getElementById("newItemInput").addEventListener("keydown", (e) => {
     if (e.key === "Enter") addManualItem();
   });
+  document.getElementById("pasteListBtn").addEventListener("click", renderPasteList);
+  document.getElementById("newListBtn").addEventListener("click", startNewShoppingList);
   document.getElementById("manageIngredientsBtn").addEventListener("click", renderItemCatalog);
   document.getElementById("exportShopBtn").addEventListener("click", exportShopList);
   document.getElementById("importShopBtn").addEventListener("click", () => document.getElementById("shopFileInput").click());
@@ -1597,9 +1787,21 @@ function startEditItem(el, id) {
   input.setSelectionRange(current.length, current.length);
   const save = async () => {
     const val = input.value.trim();
+    if (!val) { renderShopListArea(); return; }
     const all = await getShopItems();
     const item = all.find(i => i.id === id);
-    if (item && val) item.name = val;
+    if (item) {
+      // Reparse the typed text so a quantity anywhere in it (either order,
+      // "500g flour" or "flour 500g") updates the stepper too, not just
+      // the name -- consistent with adding/pasting items.
+      const parsed = parseIngredient(val);
+      item.name = parsed.name || val;
+      if (parsed.amount != null) {
+        item.quantity = parsed.amount;
+        item.unit = parsed.unit || "";
+        item.step = stepForUnit(item.unit);
+      }
+    }
     await saveShopItems(all);
     renderShopListArea();
   };
@@ -1623,6 +1825,7 @@ function renderItemCatalogSection(catalog) {
       <input type="number" class="ing-step" value="${entry.step}" title="Step" style="width:60px;">
       <input type="number" class="ing-defaultqty" value="${entry.defaultQty}" title="Default quantity" style="width:60px;">
       <label class="staple-check"><input type="checkbox" class="ing-staple" ${entry.staple ? "checked" : ""}> Staple</label>
+      <label class="staple-check" title="Automatically add this to every new shopping list"><input type="checkbox" class="ing-default" ${entry.defaultItem ? "checked" : ""}> Auto-add</label>
       <input type="text" class="ing-aliases" value="${escapeAttr((entry.aliases || []).join(", "))}" placeholder="aliases">
       <button class="icon-btn" data-action="delete-ing">✕</button>
     </div>`).join("");
@@ -1637,6 +1840,7 @@ function renderItemCatalogSection(catalog) {
       <input type="number" id="newIngStep" value="1" title="Step" style="width:60px;">
       <input type="number" id="newIngDefaultQty" value="1" title="Default quantity" style="width:60px;">
       <label class="staple-check"><input type="checkbox" id="newIngStaple"> Staple</label>
+      <label class="staple-check" title="Automatically add this to every new shopping list"><input type="checkbox" id="newIngDefault"> Auto-add</label>
       <input type="text" id="newIngAliases" placeholder="aliases">
       <button class="secondary-btn" id="addIngBtn">Add</button>
     </div>
@@ -1656,6 +1860,7 @@ function wireItemCatalogEvents() {
       entry.step = Number(row.querySelector(".ing-step").value) || 1;
       entry.defaultQty = Number(row.querySelector(".ing-defaultqty").value) || 1;
       entry.staple = row.querySelector(".ing-staple").checked;
+      entry.defaultItem = row.querySelector(".ing-default").checked;
       entry.aliases = row.querySelector(".ing-aliases").value.split(",").map(s => s.trim()).filter(Boolean);
       await saveItemCatalog(catalog);
     };
@@ -1665,6 +1870,7 @@ function wireItemCatalogEvents() {
     row.querySelector(".ing-aliases").addEventListener("blur", save);
     row.querySelector(".ing-unit").addEventListener("change", save);
     row.querySelector(".ing-staple").addEventListener("change", save);
+    row.querySelector(".ing-default").addEventListener("change", save);
     row.querySelector('[data-action="delete-ing"]').addEventListener("click", async () => {
       const catalog = await getItemCatalog();
       const entry = catalog.find(e => e.id === id);
@@ -1685,12 +1891,16 @@ function wireItemCatalogEvents() {
     const step = Number(document.getElementById("newIngStep").value) || stepForUnit(unit);
     const defaultQty = Number(document.getElementById("newIngDefaultQty").value) || 1;
     const staple = document.getElementById("newIngStaple").checked;
+    const defaultItem = document.getElementById("newIngDefault").checked;
     const aliases = document.getElementById("newIngAliases").value.split(",").map(s => s.trim()).filter(Boolean);
     if (aliases.length === 0) aliases.push(name.toLowerCase());
     const catalog = await getItemCatalog();
-    catalog.push({ id: slugify(name) + "-" + Date.now().toString(36).slice(-4), name, unit, step, defaultQty, staple, aliases });
+    const suggestion = findFuzzyCatalogSuggestion(name, catalog);
+    const newEntry = { id: slugify(name) + "-" + Date.now().toString(36).slice(-4), name, unit, step, defaultQty, staple, defaultItem, aliases };
+    catalog.push(newEntry);
     await saveItemCatalog(catalog);
     renderItemCatalog();
+    if (suggestion) offerAliasMerge(newEntry, suggestion, renderItemCatalog);
   });
   const newIngUnit = document.getElementById("newIngUnit");
   if (newIngUnit) newIngUnit.addEventListener("change", (e) => {

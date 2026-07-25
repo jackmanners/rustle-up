@@ -218,17 +218,20 @@ input[type="file"] { display: none; }
 }
 .staple-check { font-size:0.78rem; display:flex; align-items:center; gap:4px; white-space: nowrap; }
 
-/* Quantity stepper on shopping items */
-.qty-row { display:flex; align-items:center; gap:6px; margin-top:5px; }
+/* Quantity stepper on shopping items -- deliberately quiet, so it reads
+   as secondary detail rather than competing with the item name */
+.qty-row { display:flex; align-items:center; gap:3px; margin-top:4px; }
 .qty-btn {
-  width: 26px; height: 26px; border-radius: 6px; border: 1px solid var(--line); background: var(--cream);
-  color: var(--ink); font-size: 1rem; font-weight: 700; line-height: 1; padding: 0;
+  width: 20px; height: 20px; border-radius: 5px; border: 1px solid transparent; background: transparent;
+  color: var(--muted); font-size: 0.82rem; font-weight: 600; line-height: 1; padding: 0;
 }
+.qty-btn:active { background: var(--line); }
 .qty-input {
-  width: 56px; text-align: center; padding: 4px 2px; border: 1px solid var(--line); border-radius: 6px;
-  font-size: 0.85rem; background: var(--card); color: var(--ink);
+  width: 38px; text-align: center; padding: 2px 1px; border: none; border-bottom: 1px solid var(--line);
+  border-radius: 0; font-size: 0.76rem; background: transparent; color: var(--muted);
 }
-.qty-unit { font-size: 0.78rem; color: var(--muted); min-width: 20px; }
+.qty-input:focus { color: var(--ink); border-bottom-color: var(--leaf); outline: none; }
+.qty-unit { font-size: 0.7rem; color: var(--muted); min-width: 16px; }
 
 /* Meal plan ingredient comparison view */
 .compare-item { display:flex; align-items:center; gap:10px; padding: 10px 2px; border-bottom: 1px solid var(--line); }
