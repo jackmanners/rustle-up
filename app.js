@@ -42,6 +42,12 @@ const ICON_DOWNLOAD = `<svg viewBox="0 0 24 24" width="15" height="15" fill="non
 const ICON_UPLOAD = `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>`;
 const ICON_LIST = `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>`;
 const ICON_CLIPBOARD = `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/></svg>`;
+const ICON_CHEVRON_DOWN = `<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>`;
+const ICON_EYE = `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>`;
+
+// Applied immediately (before IndexedDB/DOM setup) to avoid a flash of
+// the wrong theme on load if it's been explicitly overridden.
+applyThemePreference();
 
 const DB_NAME = "recipe-box";
 const DB_VERSION = 1;
@@ -1291,6 +1297,7 @@ async function renderRustleUp(opts) {
         </div>
       </div>`;
     }).join("");
+    wireCardMediaToggles(area);
 
     area.querySelectorAll(".recipe-card").forEach(card => {
       card.addEventListener("click", (e) => {
@@ -1365,12 +1372,19 @@ async function renderRecipes() {
         <option value="timesCooked" ${currentSort === "timesCooked" ? "selected" : ""}>Most cooked</option>
         <option value="lastCooked" ${currentSort === "lastCooked" ? "selected" : ""}>Recently cooked</option>
       </select>
+      ${recipes.some(r => r.photo) ? `<button class="icon-btn" id="toggleImagesBtn" title="${cardImagesExpanded ? "Collapse images" : "Expand images"}">${ICON_EYE}</button>` : ""}
       <button class="secondary-btn" id="openAddBtn" title="Add a recipe">+ Add recipe</button>
     </div>
     <div id="recipeListArea"></div>
   `;
 
   const rerenderList = () => renderRecipeList(recipes, planIds);
+  const toggleImagesBtn = document.getElementById("toggleImagesBtn");
+  if (toggleImagesBtn) toggleImagesBtn.addEventListener("click", () => {
+    cardImagesExpanded = !cardImagesExpanded;
+    toggleImagesBtn.title = cardImagesExpanded ? "Collapse images" : "Expand images";
+    rerenderList();
+  });
 
   document.getElementById("searchInput").addEventListener("input", (e) => {
     currentSearch = e.target.value;
@@ -1441,6 +1455,7 @@ function renderRecipeList(recipes, planIds) {
   }
 
   listArea.innerHTML = html;
+  wireCardMediaToggles(listArea);
 
   listArea.querySelectorAll(".recipe-card").forEach(card => {
     card.addEventListener("click", (e) => {
@@ -1573,11 +1588,30 @@ function swatchColorForTitle(title) {
   for (let i = 0; i < title.length; i++) hash = (hash * 31 + title.charCodeAt(i)) >>> 0;
   return CARD_SWATCH_COLORS[hash % CARD_SWATCH_COLORS.length];
 }
+// Photo cards render collapsed to a compact strip by default (see
+// cardImagesExpanded), with a small per-card button to expand just that
+// one -- toggled directly via DOM/class, no re-render needed. Wire up
+// wireCardMediaToggles(container) after rendering any list of these.
+let cardImagesExpanded = false;
 function recipeCardMediaHtml(recipe) {
   if (recipe.photo) {
-    return `<div class="recipe-card-media"><img src="${escapeAttr(recipe.photo)}" alt=""></div>`;
+    const expanded = cardImagesExpanded;
+    return `<div class="recipe-card-media has-photo ${expanded ? "expanded" : ""}">
+      <img src="${escapeAttr(recipe.photo)}" alt="">
+      <button type="button" class="media-expand-btn" data-action="toggle-card-image" title="${expanded ? "Collapse image" : "Expand image"}">${ICON_CHEVRON_DOWN}</button>
+    </div>`;
   }
   return `<div class="recipe-card-media recipe-card-swatch" style="background:${swatchColorForTitle(recipe.title || "")};"></div>`;
+}
+function wireCardMediaToggles(container) {
+  container.querySelectorAll('[data-action="toggle-card-image"]').forEach(btn => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const media = btn.closest(".recipe-card-media");
+      const nowExpanded = media.classList.toggle("expanded");
+      btn.title = nowExpanded ? "Collapse image" : "Expand image";
+    });
+  });
 }
 
 async function renderDetail(id, opts) {
@@ -1886,6 +1920,7 @@ async function renderMealPlan() {
   html += `<div id="mealIngredientsArea"></div>`;
 
   main.innerHTML = html;
+  wireCardMediaToggles(main);
   await renderMealPlanNotesCard();
   await renderMealPlanIngredients(entries);
   main.querySelectorAll(".meal-day-select").forEach(select => {
@@ -3367,7 +3402,16 @@ async function renderShopHistorySection() {
 
 async function renderSettings() {
   const main = document.getElementById("main");
+  const theme = getThemePreference();
   main.innerHTML = `
+    <div class="settings-card">
+      <h3>Appearance</h3>
+      <div class="btn-row theme-toggle-row" id="themeToggleRow">
+        <button class="secondary-btn ${theme === "system" ? "selected" : ""}" data-theme-choice="system">System</button>
+        <button class="secondary-btn ${theme === "light" ? "selected" : ""}" data-theme-choice="light">Light</button>
+        <button class="secondary-btn ${theme === "dark" ? "selected" : ""}" data-theme-choice="dark">Dark</button>
+      </div>
+    </div>
     <div class="settings-card">
       <h3>Export library</h3>
       <div class="btn-row"><button class="secondary-btn" id="exportBtn">Export as JSON</button></div>
@@ -3397,6 +3441,12 @@ async function renderSettings() {
       </div>
     </div>
   `;
+  document.getElementById("themeToggleRow").querySelectorAll("[data-theme-choice]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      setThemePreference(btn.dataset.themeChoice);
+      renderSettings();
+    });
+  });
   document.getElementById("exportBtn").addEventListener("click", exportLibrary);
   document.getElementById("importBtn").addEventListener("click", () => document.getElementById("fileInput").click());
   document.getElementById("fileInput").addEventListener("change", handleFileImport);
@@ -3518,6 +3568,27 @@ function escapeHtml(str) {
   return String(str).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 function escapeAttr(str) { return escapeHtml(str); }
+
+/* ---------- Theme (light/dark/system) ----------
+   Dark mode follows the OS by default (prefers-color-scheme), but that's
+   not always what someone wants -- this lets it be pinned either way,
+   stamped as :root[data-theme] which the stylesheet's explicit override
+   rules take precedence over the system-preference media query. */
+function getThemePreference() {
+  try { return localStorage.getItem("themePreference") || "system"; } catch (err) { return "system"; }
+}
+function applyThemePreference() {
+  const pref = getThemePreference();
+  if (pref === "system") document.documentElement.removeAttribute("data-theme");
+  else document.documentElement.dataset.theme = pref;
+  const isDark = pref === "dark" || (pref === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+  const meta = document.querySelector('meta[name="theme-color"]:not([media])') || document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.setAttribute("content", isDark ? "#201c17" : "#faf5ec");
+}
+function setThemePreference(pref) {
+  try { localStorage.setItem("themePreference", pref); } catch (err) { /* private-mode storage limits -- non-fatal */ }
+  applyThemePreference();
+}
 
 /* ---------- Navigation: a hierarchy, not a browsing history ----------
    navStack is our own in-memory stack of {screen, tab, params}, root-first:

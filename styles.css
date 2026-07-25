@@ -23,8 +23,13 @@
   --shadow-soft: rgba(64, 44, 22, 0.07);
   --font-heading: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
 }
+/* Dark palette applies when the system prefers it (and there's no
+   explicit in-app override to light), or when the in-app toggle
+   (Settings > Appearance) explicitly forces dark regardless of system
+   preference. :root[data-theme] is stamped by app.js from a choice saved
+   in localStorage; no attribute at all means "follow the system". */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --ink: #ece5d8;
     --leaf: #5fa872;
     --leaf-dark: #8fd6a0;
@@ -46,8 +51,35 @@
     --shadow-soft: rgba(0, 0, 0, 0.28);
   }
 }
+:root[data-theme="dark"] {
+  --ink: #ece5d8;
+  --leaf: #5fa872;
+  --leaf-dark: #8fd6a0;
+  --leaf-bg: #1e3327;
+  --cream: #201c17;
+  --card: #2a2520;
+  --line: #423a2f;
+  --muted: #a89f8d;
+  --staple: #d9a75a;
+  --staple-bg: #382c19;
+  --staple-line: #55432a;
+  --danger: #e2796a;
+  --danger-bg: #3a221c;
+  --accent: #e08a54;
+  --accent-dark: #f0a875;
+  --accent-bg: #3a2818;
+  --gold: #e0b84a;
+  --shadow: rgba(0, 0, 0, 0.4);
+  --shadow-soft: rgba(0, 0, 0, 0.28);
+}
 * { box-sizing: border-box; }
-html, body { height: 100%; }
+/* The page itself never scrolls -- only #main does (or, on Home, #main's
+   own internal meal-plan list). overflow:hidden here is a hard guarantee
+   independent of 100dvh's precision, which varies enough across mobile
+   browser chrome (address bar show/hide, safe-area insets) that relying
+   on it alone let the whole page -- header included -- scroll instead of
+   just the intended region. */
+html, body { height: 100%; overflow: hidden; }
 body {
   margin: 0;
   height: 100dvh;
@@ -177,12 +209,25 @@ main.home-screen > .btn-row {
   overflow: hidden;
 }
 .recipe-card-body { padding: 14px 16px; }
-/* A real photo if one's been added; otherwise a deterministic color band
-   (from the title) so cards still read as distinct "hero" items rather
-   than uniform list rows, even without a picture. */
-.recipe-card-media { width: 100%; height: 120px; }
+/* A real photo if one's been added -- collapsed to a compact strip by
+   default with a per-card button to expand it, plus a list-level toggle
+   to expand/collapse all of them at once. A recipe with no photo gets
+   only a thin deterministic color line (from the title) so cards still
+   read as visually distinct without one card's worth of blank color
+   competing for the same space a real photo would use -- there's nothing
+   to "expand" about a flat color, so it never gets the expand control. */
+.recipe-card-media { width: 100%; position: relative; }
 .recipe-card-media img { width: 100%; height: 100%; object-fit: cover; display: block; }
-.recipe-card-swatch { opacity: 0.88; }
+.recipe-card-media.recipe-card-swatch { height: 5px; }
+.recipe-card-media.has-photo { height: 46px; transition: height 0.2s ease; }
+.recipe-card-media.has-photo.expanded { height: 170px; }
+.media-expand-btn {
+  position: absolute; right: 6px; bottom: 6px; z-index: 1;
+  background: rgba(0,0,0,0.55); color: #fff; border: none; border-radius: 6px;
+  width: 22px; height: 22px; display: flex; align-items: center; justify-content: center;
+}
+.media-expand-btn svg { transition: transform 0.2s ease; }
+.recipe-card-media.expanded .media-expand-btn svg { transform: rotate(180deg); }
 .recipe-card h3 { margin: 0 0 4px; font-size: 1.12rem; font-family: var(--font-heading); letter-spacing: -0.01em; }
 .stars { display:inline-flex; gap:1px; margin-bottom: 4px; }
 .star { font-size: 0.92rem; color: var(--line); line-height: 1; }
@@ -375,6 +420,7 @@ textarea {
   padding: 9px 14px; border-radius: 8px; font-size: 0.85rem; font-weight: 600;
 }
 .secondary-btn:disabled { opacity: 0.4; }
+.theme-toggle-row .secondary-btn.selected { background: var(--leaf); color: #fff; border-color: var(--leaf); }
 input[type="file"] { display: none; }
 .ingredient-row { display:flex; gap:8px; align-items:center; padding: 8px 0; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
 .ingredient-row:last-child { border-bottom: none; }
