@@ -1041,7 +1041,7 @@ async function renderHome() {
       <h3>Not sure what to cook?</h3>
       <p>Pick a few tags or ingredients and see what fits.</p>
       <div class="btn-row">
-        <button class="primary-btn" id="homeRustleUpBtn" style="margin-top:0;">🎲 Rustle Up</button>
+        <button class="primary-btn icon-label-btn" id="homeRustleUpBtn" style="margin-top:0;">${ICON_SHUFFLE} Rustle Up</button>
       </div>
     </div>
     <div class="settings-card">
@@ -1157,7 +1157,7 @@ async function renderRustleUp(opts) {
   main.innerHTML = `
     <button class="back-btn" id="rustleBackBtn">&larr; Back to Home</button>
     <div class="detail-card">
-      <h2>🎲 Rustle Up</h2>
+      <h2 class="icon-label-heading">${ICON_SHUFFLE} Rustle Up</h2>
       <p style="font-size:0.85rem;color:var(--muted);margin:0 0 12px;">Pick a few tags or ingredients you're in the mood for.</p>
 
       <div class="section-label">Tags</div>
@@ -1790,7 +1790,7 @@ async function renderMealPlan() {
           <input type="number" min="1" class="meal-serves-input" id="serves-${escapeAttr(en.id)}" data-entry-id="${escapeAttr(en.id)}" data-base-serves="${en.baseServes}" value="${en.servesOverride || en.baseServes}">
         </div>` : ""}
         <div class="card-actions">
-          ${en.recipeId ? `<button class="mini-btn" data-action="mark-cooked" data-id="${escapeAttr(en.id)}">🍳 Mark as cooked</button>` : ""}
+          ${en.recipeId ? `<button class="mini-btn icon-label-btn" data-action="mark-cooked" data-id="${escapeAttr(en.id)}">${ICON_FLAME} Mark as cooked</button>` : ""}
           <button class="mini-btn danger" data-action="remove-entry" data-id="${escapeAttr(en.id)}">Remove from plan</button>
         </div>
       </div>`;
