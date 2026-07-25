@@ -64,6 +64,7 @@ let showCheckedItems = false;
 let shopSelectMode = false;
 let selectedShopIds = new Set();
 let shopMenuOpen = false;
+let preSettingsStack = null; // navStack snapshot from just before entering Settings, so a second cog tap returns to it
 let mealPlanNotesOpen = false;
 let shopNotesOpen = false;
 
@@ -2572,7 +2573,7 @@ function renderShopItem(item, opts) {
       <span class="qty-unit">${escapeHtml(item.unit || "")}</span>
       <button class="qty-btn" data-action="qty-inc" title="Increase">+</button>
     </span>` : "";
-  return `<div class="shop-item ${item.checked ? "checked" : ""} ${selected ? "selected" : ""}" data-id="${escapeAttr(item.id)}" data-scope="${escapeAttr(opts.scope || "")}">
+  return `<div class="shop-item ${item.checked ? "checked" : ""} ${selected ? "selected" : ""}" data-id="${escapeAttr(item.id)}" data-scope="${escapeAttr(opts.scope || "")}" data-catalog-id="${escapeAttr(item.catalogId || "")}">
     ${!shopSelectMode ? `<div class="swipe-bg-inner">Delete</div>` : ""}
     <div class="swipe-content">
       ${leadBox}
@@ -2663,16 +2664,30 @@ function startEditItem(el, id) {
 // vertical list scrolling stay native; only once a gesture is decided to
 // be horizontal do we take over and prevent the click that would
 // otherwise follow.
+const LONG_PRESS_MS = 500;
+
 function wireSwipeToDelete(itemEl, id) {
   const content = itemEl.querySelector(".swipe-content");
   if (!content) return;
   let startX = 0, startY = 0, dx = 0, tracking = false, decided = false, horizontal = false;
+  let longPressTimer = null, longPressFired = false;
   const SWIPE_THRESHOLD = -60;
   const MAX_SWIPE = -96;
+
+  const cancelLongPress = () => { clearTimeout(longPressTimer); longPressTimer = null; };
 
   content.addEventListener("pointerdown", (e) => {
     if (e.target.closest(".box, .drag-handle, .qty-row, input, button")) return;
     startX = e.clientX; startY = e.clientY; dx = 0; tracking = true; decided = false; horizontal = false;
+    longPressFired = false;
+    const catalogId = itemEl.dataset.catalogId;
+    if (catalogId) {
+      longPressTimer = setTimeout(() => {
+        longPressFired = true;
+        tracking = false;
+        showItemDetailsPopover(catalogId);
+      }, LONG_PRESS_MS);
+    }
   });
   content.addEventListener("pointermove", (e) => {
     if (!tracking) return;
@@ -2680,6 +2695,7 @@ function wireSwipeToDelete(itemEl, id) {
     if (!decided) {
       if (Math.abs(mdx) < 8 && Math.abs(mdy) < 8) return;
       decided = true;
+      cancelLongPress(); // real movement means this is a swipe/scroll, not a long-press
       horizontal = Math.abs(mdx) > Math.abs(mdy);
       if (horizontal) { try { content.setPointerCapture(e.pointerId); } catch (err) { /* best-effort */ } }
     }
@@ -2690,9 +2706,10 @@ function wireSwipeToDelete(itemEl, id) {
     itemEl.classList.toggle("swipe-armed", dx <= SWIPE_THRESHOLD);
   });
   const end = (e) => {
+    cancelLongPress();
     if (!tracking) return;
     tracking = false;
-    if (horizontal) {
+    if (horizontal || longPressFired) {
       const cancelClick = (ev) => { ev.stopPropagation(); ev.preventDefault(); };
       content.addEventListener("click", cancelClick, { capture: true, once: true });
       setTimeout(() => content.removeEventListener("click", cancelClick, { capture: true }), 0);
@@ -2759,6 +2776,26 @@ function itemTagChipsHtml(entry) {
   return html;
 }
 
+// Shared between the inline shelf row's disclosure panel and the shopping
+// list's long-press popover, so both edit the exact same fields the exact
+// same way instead of maintaining two forms.
+function itemDetailsFieldsHtml(entry) {
+  return `
+    <div class="form-row-3">
+      <div class="form-field"><label>Unit</label><input type="text" class="ing-unit" list="unitPresets" value="${escapeAttr(entry.unit)}" placeholder="count"></div>
+      <div class="form-field"><label>Step</label><input type="number" class="ing-step" value="${entry.step}"></div>
+      <div class="form-field"><label>Default qty</label><input type="number" class="ing-defaultqty" value="${entry.defaultQty}"></div>
+    </div>
+    <div class="form-field"><label>Aliases (comma separated)</label><input type="text" class="ing-aliases" value="${escapeAttr((entry.aliases || []).join(", "))}"></div>
+    <div class="form-field">
+      <label>Never match (comma separated)</label>
+      <input type="text" class="ing-anti-aliases" placeholder="e.g. sourdough, sour" value="${escapeAttr((entry.antiAliases || []).join(", "))}">
+      <p class="field-hint">Text containing any of these skips this item -- e.g. "sourdough" on "Bread" so it doesn't get lumped in with plain bread.</p>
+    </div>
+    <div class="form-field"><label>Notes</label><textarea class="ing-notes" placeholder="Alternatives, brand preferences, anything worth remembering...">${escapeHtml(entry.notes || "")}</textarea></div>
+  `;
+}
+
 function renderItemCatalogRow(entry) {
   return `
     <div class="shelf-item" data-id="${escapeAttr(entry.id)}" style="border-left-color:${swatchColorForTitle(entry.name)};">
@@ -2768,19 +2805,7 @@ function renderItemCatalogRow(entry) {
           <input type="text" class="ing-name shelf-name-input" value="${escapeAttr(entry.name)}">
           ${itemTagChipsHtml(entry)}
           <div class="shelf-item-details hidden" data-details>
-            <div class="form-row-2">
-              <div class="form-field"><label>Unit</label><input type="text" class="ing-unit" list="unitPresets" value="${escapeAttr(entry.unit)}" placeholder="count"></div>
-              <div class="form-field"><label>Step</label><input type="number" class="ing-step" value="${entry.step}"></div>
-            </div>
-            <div class="form-row-2">
-              <div class="form-field"><label>Default quantity</label><input type="number" class="ing-defaultqty" value="${entry.defaultQty}"></div>
-              <div class="form-field"><label>Aliases (comma separated)</label><input type="text" class="ing-aliases" value="${escapeAttr((entry.aliases || []).join(", "))}"></div>
-            </div>
-            <div class="form-field">
-              <label>Never match (comma separated)</label>
-              <input type="text" class="ing-anti-aliases" placeholder="e.g. sourdough, sour" value="${escapeAttr((entry.antiAliases || []).join(", "))}">
-              <p class="field-hint">Ingredient text containing any of these will skip this item, even if it would otherwise match -- e.g. add "sourdough" here on "Bread" so a recipe calling for sourdough doesn't get lumped in with plain bread.</p>
-            </div>
+            ${itemDetailsFieldsHtml(entry)}
           </div>
         </div>
         <button type="button" class="icon-btn shelf-details-btn" data-action="toggle-details" title="More options">⋯</button>
@@ -2800,7 +2825,7 @@ function renderNewItemRow() {
   `;
 }
 
-function startAddItemTag(row, id) {
+function startAddItemTag(row, id, onDone) {
   const addBtn = row.querySelector('[data-action="add-tag"]');
   if (!addBtn) return;
   const input = document.createElement("input");
@@ -2824,7 +2849,7 @@ function startAddItemTag(row, id) {
         await saveItemCatalog(catalog);
       }
     }
-    renderItemCatalogRows();
+    (onDone || renderItemCatalogRows)();
   };
   input.addEventListener("blur", commit);
   input.addEventListener("keydown", (e) => {
@@ -2833,27 +2858,121 @@ function startAddItemTag(row, id) {
   });
 }
 
+// Quick-edit popover for a shelf entry, opened by long-pressing a shopping
+// list item -- lets you fix up unit/aliases/notes/etc. right from the
+// shopping list instead of having to leave for the Shelf tab. Re-renders
+// its own body in place after any change rather than closing, so several
+// small edits (add a tag, tweak a note) can happen in one long-press.
+async function showItemDetailsPopover(catalogId) {
+  const overlay = document.createElement("div");
+  overlay.className = "rating-popup-overlay";
+  document.body.appendChild(overlay);
+  const close = async () => {
+    overlay.remove();
+    // Shopping list rows carry their own name/staple snapshot from when
+    // they were added, so a rename/staple-toggle made here wouldn't
+    // otherwise show up on the list until the item was re-added.
+    const [items, catalog] = await Promise.all([getShopItems(), getItemCatalog()]);
+    const entry = catalog.find(e => e.id === catalogId);
+    if (entry) {
+      let changed = false;
+      items.forEach(i => {
+        if (i.catalogId !== catalogId) return;
+        if (i.name !== entry.name) { i.name = entry.name; changed = true; }
+        if (i.staple !== !!entry.staple) { i.staple = !!entry.staple; changed = true; }
+      });
+      if (changed) await saveShopItems(items);
+    }
+    if (document.getElementById("shopListArea")) renderShopListArea();
+  };
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+
+  const refresh = async () => {
+    const catalog = await getItemCatalog();
+    const entry = catalog.find(e => e.id === catalogId);
+    if (!entry) { close(); return; }
+    overlay.innerHTML = `
+      <div class="rating-popup item-popover">
+        <div class="item-popover-header">
+          <input type="text" class="ing-name" value="${escapeAttr(entry.name)}">
+          <button class="icon-btn" id="itemPopoverCloseBtn" title="Close">✕</button>
+        </div>
+        ${itemTagChipsHtml(entry)}
+        <div class="shelf-item-details">${itemDetailsFieldsHtml(entry)}</div>
+      </div>`;
+    const root = overlay.querySelector(".item-popover");
+    document.getElementById("itemPopoverCloseBtn").addEventListener("click", close);
+    const save = () => saveItemFieldsFromRoot(root, catalogId);
+    root.querySelectorAll(".ing-name, .ing-unit, .ing-step, .ing-defaultqty, .ing-aliases, .ing-anti-aliases, .ing-notes").forEach(el => {
+      el.addEventListener("blur", save);
+    });
+    root.querySelector('[data-action="toggle-staple"]').addEventListener("click", async () => {
+      const cat = await getItemCatalog();
+      const e2 = cat.find(x => x.id === catalogId);
+      if (!e2) return;
+      e2.tags = e2.tags || [];
+      if (e2.tags.includes(STAPLE_TAG)) e2.tags = e2.tags.filter(t => t !== STAPLE_TAG);
+      else e2.tags.push(STAPLE_TAG);
+      syncStapleFromTags(e2);
+      await saveItemCatalog(cat);
+      refresh();
+    });
+    root.querySelector('[data-action="toggle-default"]').addEventListener("click", async () => {
+      const cat = await getItemCatalog();
+      const e2 = cat.find(x => x.id === catalogId);
+      if (!e2) return;
+      e2.defaultItem = !e2.defaultItem;
+      await saveItemCatalog(cat);
+      refresh();
+    });
+    root.querySelectorAll(".item-tag-chip").forEach(chip => {
+      chip.addEventListener("click", async () => {
+        const cat = await getItemCatalog();
+        const e2 = cat.find(x => x.id === catalogId);
+        if (!e2) return;
+        e2.tags = (e2.tags || []).filter(t => t !== chip.dataset.tag);
+        syncStapleFromTags(e2);
+        await saveItemCatalog(cat);
+        refresh();
+      });
+    });
+    const addTagBtn = root.querySelector('[data-action="add-tag"]');
+    if (addTagBtn) addTagBtn.addEventListener("click", () => startAddItemTag(root, catalogId, refresh));
+  };
+  await refresh();
+}
+
+// Reads every field an item details form exposes (whichever root it's
+// mounted in -- the inline shelf row disclosure, or the shopping list's
+// long-press popover) and saves them back to the catalog entry, so both
+// surfaces edit the same shape the same way without duplicating this logic.
+async function saveItemFieldsFromRoot(root, id) {
+  const catalog = await getItemCatalog();
+  const entry = catalog.find(e => e.id === id);
+  if (!entry) return null;
+  const nameInput = root.querySelector(".ing-name");
+  if (nameInput) entry.name = nameInput.value.trim() || entry.name;
+  entry.unit = root.querySelector(".ing-unit").value.trim();
+  entry.step = Number(root.querySelector(".ing-step").value) || 1;
+  entry.defaultQty = Number(root.querySelector(".ing-defaultqty").value) || 1;
+  entry.aliases = root.querySelector(".ing-aliases").value.split(",").map(s => s.trim()).filter(Boolean);
+  entry.antiAliases = root.querySelector(".ing-anti-aliases").value.split(",").map(s => s.trim()).filter(Boolean);
+  entry.notes = root.querySelector(".ing-notes").value.trim();
+  await saveItemCatalog(catalog);
+  return entry;
+}
+
 function wireItemCatalogEvents() {
   const main = document.getElementById("main");
   main.querySelectorAll(".shelf-item[data-id]").forEach(row => {
     const id = row.dataset.id;
-    const save = async () => {
-      const catalog = await getItemCatalog();
-      const entry = catalog.find(e => e.id === id);
-      if (!entry) return;
-      entry.name = row.querySelector(".ing-name").value.trim() || entry.name;
-      entry.unit = row.querySelector(".ing-unit").value.trim();
-      entry.step = Number(row.querySelector(".ing-step").value) || 1;
-      entry.defaultQty = Number(row.querySelector(".ing-defaultqty").value) || 1;
-      entry.aliases = row.querySelector(".ing-aliases").value.split(",").map(s => s.trim()).filter(Boolean);
-      entry.antiAliases = row.querySelector(".ing-anti-aliases").value.split(",").map(s => s.trim()).filter(Boolean);
-      await saveItemCatalog(catalog);
-    };
+    const save = () => saveItemFieldsFromRoot(row, id);
     row.querySelector(".ing-name").addEventListener("blur", save);
     row.querySelector(".ing-step").addEventListener("blur", save);
     row.querySelector(".ing-defaultqty").addEventListener("blur", save);
     row.querySelector(".ing-aliases").addEventListener("blur", save);
     row.querySelector(".ing-anti-aliases").addEventListener("blur", save);
+    row.querySelector(".ing-notes").addEventListener("blur", save);
     row.querySelector(".ing-unit").addEventListener("blur", save);
 
     row.querySelector('[data-action="toggle-staple"]').addEventListener("click", async () => {
@@ -2918,7 +3037,7 @@ function wireItemCatalogEvents() {
     const newEntry = {
       id: slugify(name) + "-" + Date.now().toString(36).slice(-4), name,
       unit: "", step: 1, defaultQty: 1, staple: false, defaultItem: false,
-      aliases: [name.toLowerCase()], antiAliases: [], tags: []
+      aliases: [name.toLowerCase()], antiAliases: [], notes: "", tags: []
     };
     catalog.push(newEntry);
     await saveItemCatalog(catalog);
@@ -3100,21 +3219,82 @@ async function renderDuplicateScan() {
   });
 }
 
+// Scans every recipe's ingredients for anything that doesn't match the
+// shelf yet (same matchCatalog/findFuzzyCatalogSuggestion check used at
+// recipe-add time), so the shelf can be bulk-populated from an existing
+// recipe library in one pass instead of only growing one recipe at a time.
+async function renderPopulateFromRecipes() {
+  const container = document.getElementById("dupResultsArea");
+  if (!container) return;
+  const [recipes, catalog] = await Promise.all([getAllRecipes(), getItemCatalog()]);
+  const seen = new Map(); // lowercase name -> original-case name
+  recipes.forEach(r => {
+    (r.ingredients || []).forEach(line => {
+      const name = parseIngredient(line).name || line;
+      if (!name) return;
+      const key = name.toLowerCase().trim();
+      if (!key || seen.has(key)) return;
+      if (matchCatalog(name, catalog) || findFuzzyCatalogSuggestion(name, catalog)) return;
+      seen.set(key, name);
+    });
+  });
+  const unmatched = [...seen.values()].sort((a, b) => a.localeCompare(b));
+  if (unmatched.length === 0) {
+    container.innerHTML = `<div class="status-msg status-ok">Every recipe ingredient is already on your shelf.</div>`;
+    return;
+  }
+  container.innerHTML = `<div class="section-label">Not yet on your shelf</div>
+    <div class="btn-row" style="margin-bottom:10px;"><button class="secondary-btn" id="addAllFromRecipesBtn">Add all ${unmatched.length}</button></div>` +
+    unmatched.map((name, i) => `
+    <div class="compare-item" data-idx="${i}">
+      <div class="item-body"><div class="item-text">${escapeHtml(name)}</div></div>
+      <button class="secondary-btn" data-action="add-from-recipe" data-idx="${i}">Add</button>
+      <button class="icon-btn" data-action="dismiss-dup">✕</button>
+    </div>`).join("");
+
+  const addOne = async (name) => {
+    const cat = await getItemCatalog();
+    if (matchCatalog(name, cat)) return;
+    cat.push({
+      id: slugify(name) + "-" + Date.now().toString(36).slice(-4) + "-" + Math.random().toString(36).slice(-3),
+      name, aliases: [name.toLowerCase()], antiAliases: [], staple: false, unit: "", step: stepForUnit(""), defaultQty: 1
+    });
+    await saveItemCatalog(cat);
+  };
+  container.querySelectorAll('[data-action="add-from-recipe"]').forEach(btn => {
+    btn.addEventListener("click", async () => {
+      await addOne(unmatched[Number(btn.dataset.idx)]);
+      renderItemCatalogRows();
+      btn.closest(".compare-item").remove();
+    });
+  });
+  container.querySelectorAll('[data-action="dismiss-dup"]').forEach(btn => {
+    btn.addEventListener("click", () => btn.closest(".compare-item").remove());
+  });
+  const addAllBtn = document.getElementById("addAllFromRecipesBtn");
+  if (addAllBtn) addAllBtn.addEventListener("click", async () => {
+    for (const name of unmatched) await addOne(name);
+    renderItemCatalogRows();
+    renderPopulateFromRecipes();
+  });
+}
+
 async function renderItemCatalog() {
   const main = document.getElementById("main");
   const catalog = await getItemCatalog();
   const tags = allItemTags(catalog);
   main.innerHTML = `
     <div class="detail-card">
-      <h2>Items</h2>
+      <h2>Shelf</h2>
       <div class="toolbar">
-        ${searchBoxHtml("itemCatalogSearch", "Search items...", currentItemSearch)}
+        ${searchBoxHtml("itemCatalogSearch", "Search your shelf...", currentItemSearch)}
         <select id="itemTagFilter">
           <option value="">All tags</option>
           <option value="__staple" ${currentItemTagFilter === "__staple" ? "selected" : ""}>Staple</option>
           ${tags.map(t => `<option value="${escapeAttr(t)}" ${t === currentItemTagFilter ? "selected" : ""}>${escapeHtml(t)}</option>`).join("")}
         </select>
         <button class="secondary-btn" id="findDupesBtn">Find duplicates</button>
+        <button class="secondary-btn" id="populateFromRecipesBtn">Populate from recipes</button>
       </div>
       <div id="dupResultsArea"></div>
       <div id="ingCatalogArea"></div>
@@ -3133,6 +3313,7 @@ async function renderItemCatalog() {
     renderItemCatalogRows();
   });
   document.getElementById("findDupesBtn").addEventListener("click", renderDuplicateScan);
+  document.getElementById("populateFromRecipesBtn").addEventListener("click", renderPopulateFromRecipes);
   await renderItemCatalogRows();
 }
 
@@ -3246,9 +3427,12 @@ function renderAdd(statusMsg, opts) {
 }
 
 // Checks the ingredient textarea against the item catalog and shows which
-// lines don't match anything yet, with a bulk "Add as items" action -- so
-// aliases/items can get built out at recipe-add time instead of only when
-// something is first added to the shopping list.
+// lines don't match anything yet, with a bulk "Add as items" action, plus a
+// per-line "Link to..." picker for when the ingredient is really just a
+// different name for something already on the shelf (e.g. "capsicum"
+// should become an alias of an existing "Bell pepper" entry, not a
+// duplicate item) -- so the shelf can be built out at recipe-add time
+// either way, not just by auto-creating everything unrecognized.
 async function renderUnmatchedHint() {
   const hintEl = document.getElementById("unmatchedHint");
   if (!hintEl) return;
@@ -3264,17 +3448,44 @@ async function renderUnmatchedHint() {
     }
   });
   if (unmatched.length === 0) { hintEl.innerHTML = ""; return; }
+  const catalogOptions = catalog.slice().sort((a, b) => a.name.localeCompare(b.name))
+    .map(e => `<option value="${escapeAttr(e.id)}">${escapeHtml(e.name)}</option>`).join("");
   hintEl.innerHTML = `<div class="status-msg" style="margin:-6px 0 14px;">
-    ${unmatched.length} ingredient(s) not yet in your Item Manager: ${unmatched.map(n => escapeHtml(n)).join(", ")}.
-    <button class="mini-btn" id="addUnmatchedBtn" type="button" style="margin-left:8px;">Add as items</button>
+    <div style="margin-bottom:8px;">${unmatched.length} ingredient(s) not yet on your shelf:</div>
+    ${unmatched.map((n, i) => `
+      <div class="unmatched-row" data-idx="${i}">
+        <span class="unmatched-name">${escapeHtml(n)}</span>
+        <select class="unmatched-link" data-idx="${i}">
+          <option value="">Link to existing...</option>
+          ${catalogOptions}
+        </select>
+      </div>`).join("")}
+    <button class="mini-btn" id="addUnmatchedBtn" type="button" style="margin-top:8px;">Add remaining as new items</button>
   </div>`;
+  hintEl.querySelectorAll(".unmatched-link").forEach(sel => {
+    sel.addEventListener("change", async () => {
+      const entryId = sel.value;
+      if (!entryId) return;
+      const name = unmatched[Number(sel.dataset.idx)];
+      const cat = await getItemCatalog();
+      const entry = cat.find(e => e.id === entryId);
+      if (entry) {
+        entry.aliases = entry.aliases || [];
+        const norm = name.toLowerCase();
+        if (!entry.aliases.includes(norm)) entry.aliases.push(norm);
+        await saveItemCatalog(cat);
+        showToast(`Linked "${name}" to "${entry.name}".`, null, null);
+      }
+      renderUnmatchedHint();
+    });
+  });
   document.getElementById("addUnmatchedBtn").addEventListener("click", async () => {
     const cat = await getItemCatalog();
     unmatched.forEach(name => {
       if (matchCatalog(name, cat)) return;
       cat.push({
         id: slugify(name) + "-" + Date.now().toString(36).slice(-4) + "-" + Math.random().toString(36).slice(-3),
-        name, aliases: [name.toLowerCase()], staple: false, unit: "", step: stepForUnit(""), defaultQty: 1
+        name, aliases: [name.toLowerCase()], antiAliases: [], staple: false, unit: "", step: stepForUnit(""), defaultQty: 1
       });
     });
     await saveItemCatalog(cat);
@@ -3887,7 +4098,22 @@ document.getElementById("tabRecipesBtn").addEventListener("click", () => goToTab
 document.getElementById("tabPlanBtn").addEventListener("click", () => goToTab("mealplan"));
 document.getElementById("tabShopBtn").addEventListener("click", () => goToTab("shop"));
 document.getElementById("tabItemsBtn").addEventListener("click", () => goToTab("items"));
-document.getElementById("tabSettingsBtn").addEventListener("click", () => goToTab("settings"));
+document.getElementById("tabSettingsBtn").addEventListener("click", () => {
+  // A second tap on the cog while already on Settings returns to wherever
+  // you were (not just Home) -- goToTab's usual lateral reset would
+  // otherwise throw away the nested screen/tab you came from.
+  const top = navStack[navStack.length - 1];
+  if (top.screen === "tab" && top.tab === "settings" && preSettingsStack) {
+    navStack = preSettingsStack;
+    preSettingsStack = null;
+    persistNavStack();
+    pushTrap();
+    renderStackTop();
+  } else {
+    preSettingsStack = navStack.slice();
+    goToTab("settings");
+  }
+});
 window.addEventListener("popstate", () => {
   if (navStack.length > 1) {
     navStack.pop();

@@ -372,6 +372,9 @@ textarea {
 .form-field { margin-bottom: 12px; }
 .form-field label { display:block; font-size:0.76rem; font-weight:600; color:var(--muted); margin-bottom:4px; }
 .field-hint { font-size: 0.74rem; color: var(--muted); margin: 4px 2px 0; line-height: 1.35; }
+.unmatched-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 5px 0; }
+.unmatched-name { font-size: 0.85rem; }
+.unmatched-link { font-size: 0.78rem; padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); color: var(--ink); max-width: 160px; }
 .form-field input[type="text"], .form-field input[type="url"], .form-field input[type="number"] {
   width:100%; padding:9px 12px; border:1px solid var(--line); border-radius:8px;
   font-size:0.9rem; background:var(--card); color:var(--ink);
@@ -379,6 +382,8 @@ textarea {
 .form-field textarea { min-height: 120px; font-family: inherit; font-size: 0.88rem; }
 .form-row-2 { display:flex; gap:10px; flex-wrap: wrap; }
 .form-row-2 .form-field { flex:1; min-width: 140px; }
+.form-row-3 { display:flex; gap:8px; flex-wrap: wrap; }
+.form-row-3 .form-field { flex:1; min-width: 80px; }
 
 /* Shopping list */
 .add-item-row { display:flex; gap:8px; margin-bottom: 14px; }
@@ -545,8 +550,17 @@ input[type="file"] { display: none; }
 }
 .item-tag-input { border-style: solid; width: 80px; cursor: text; }
 .shelf-details-btn { font-weight: 700; letter-spacing: 1px; }
-.shelf-item-details { margin: 12px 0 2px 26px; }
+/* Compact: tighter field spacing/sizing than the recipe form's fields,
+   since a shelf row's disclosure is meant to be a quick peek, not a
+   full-page form. */
+.shelf-item-details { margin: 10px 0 2px 26px; }
 .shelf-item-details.hidden { display: none; }
+.shelf-item-details .form-field { margin-bottom: 8px; }
+.shelf-item-details .form-field label { margin-bottom: 2px; }
+.shelf-item-details input[type="text"], .shelf-item-details input[type="number"] {
+  padding: 6px 8px; font-size: 0.85rem;
+}
+.shelf-item-details textarea.ing-notes { min-height: 50px; padding: 6px 8px; font-size: 0.85rem; }
 .shelf-new-item { padding-top: 14px; }
 .shelf-new-item .shelf-item-main { gap: 8px; align-items: center; }
 .shelf-new-item .shelf-name-input {
@@ -654,6 +668,20 @@ input[type="file"] { display: none; }
 .rating-popup p { margin: 0 0 12px; font-size: 0.85rem; color: var(--muted); }
 .rating-popup .stars { justify-content: center; margin-bottom: 14px; }
 .rating-popup #ratingPopupStars { display:flex; justify-content:center; }
+
+/* Item details popover -- long-press a shopping list item to jump straight
+   to editing its shelf entry, without leaving the Shopping tab. Shares the
+   same overlay chrome as the rating popup but is left-aligned and taller
+   since it holds a full (if compact) edit form. */
+.item-popover { text-align: left; max-width: 380px; max-height: 84vh; overflow-y: auto; }
+.item-popover-header { display:flex; align-items:center; gap:8px; margin-bottom: 8px; }
+.item-popover-header .ing-name {
+  flex: 1; font-family: var(--font-heading); font-size: 1.1rem; font-weight: 600;
+  border: none; border-bottom: 1px solid transparent; background: transparent; color: var(--ink); padding: 2px 0;
+}
+.item-popover-header .ing-name:focus { outline: none; border-bottom-color: var(--leaf); }
+.item-popover .shelf-item-details { margin: 0; }
+.item-popover .item-tag-row { margin-bottom: 10px; }
 
 /* Print view -- only reached via the recipe detail page's Print button.
    Strips everything but the recipe itself so it reads well on paper: no
