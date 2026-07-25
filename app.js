@@ -25,6 +25,23 @@
 const ICON_POT = `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10h18v2a7 7 0 0 1-7 7h-4a7 7 0 0 1-7-7v-2z"/><path d="M1 10h22"/><path d="M8 10V7.5A1.5 1.5 0 0 1 9.5 6H10"/><path d="M15 6h.5A1.5 1.5 0 0 1 17 7.5V10"/></svg>`;
 const ICON_SHUFFLE = `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/></svg>`;
 const ICON_FLAME = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8.5 14.5A2.5 2.5 0 0 0 11 17a2.5 2.5 0 0 0 2.5-2.5c0-1.38-.5-2-1-3-1.07-2.14-.22-4.05 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7.5 7.5 0 1 1-15 0c0-1.15.43-2.29 1-3a2.5 2.5 0 0 0 2.5 2.5z"/></svg>`;
+// Distinguishes a meal-plan entry that links to a real recipe (book icon,
+// tappable) from a manual placeholder entry (note icon, not tappable) --
+// same idea used on Home's "at a glance" list and anywhere else the two
+// need to read differently at a glance.
+const ICON_BOOK = `<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>`;
+const ICON_NOTE = `<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>`;
+// A small shared icon set so secondary/utility actions (delete, print,
+// export, import) can read as icon-only buttons instead of yet more text
+// buttons competing for attention next to the primary, state-labeled ones
+// (like "+ Add to meal plan" / "Mark as cooked") that actually need words.
+const ICON_TRASH = `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>`;
+const ICON_EDIT = `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-5"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4Z"/></svg>`;
+const ICON_PRINT = `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>`;
+const ICON_DOWNLOAD = `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>`;
+const ICON_UPLOAD = `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>`;
+const ICON_LIST = `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>`;
+const ICON_CLIPBOARD = `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/></svg>`;
 
 const DB_NAME = "recipe-box";
 const DB_VERSION = 1;
@@ -1060,11 +1077,19 @@ async function renderHome() {
   if (sorted.length === 0) {
     planHtml = `<div class="empty-msg">Nothing planned yet.</div>`;
   } else {
-    const rows = sorted.map(en => `
-      <div class="home-plan-row" ${en.recipeId ? `data-recipe-id="${escapeAttr(en.recipeId)}"` : ""}>
-        <span class="home-plan-day">${en.day ? MEAL_PLAN_DAY_NAMES[en.day].slice(0, 3) : "–"}</span>
+    const rows = sorted.map(en => {
+      // A book icon + chevron for real recipes (tappable, opens the
+      // recipe); a note icon for manual placeholder entries (not
+      // tappable) -- so the two read differently at a glance instead of
+      // looking like the same kind of row.
+      const dayBadge = anyDayAssigned ? `<span class="home-plan-day">${en.day ? MEAL_PLAN_DAY_NAMES[en.day].slice(0, 3) : ""}</span>` : "";
+      return `<div class="home-plan-row ${en.recipeId ? "" : "home-plan-row-manual"}" ${en.recipeId ? `data-recipe-id="${escapeAttr(en.recipeId)}"` : ""}>
+        ${dayBadge}
+        <span class="home-plan-icon">${en.recipeId ? ICON_BOOK : ICON_NOTE}</span>
         <span class="home-plan-title">${escapeHtml(en.title)}</span>
-      </div>`).join("");
+        ${en.recipeId ? `<span class="home-plan-chevron">›</span>` : ""}
+      </div>`;
+    }).join("");
     // Scrolls internally past a handful of entries instead of truncating --
     // the point of "at a glance" is to see everything planned so far, not
     // just a sample, so nothing gets hidden behind a "+N more".
@@ -1077,9 +1102,6 @@ async function renderHome() {
     <div class="settings-card">
       <h3>Meal Plan at a glance</h3>
       ${planHtml}
-      <div class="btn-row" style="margin-top:12px;">
-        <button class="secondary-btn" id="homeSeePlanBtn">Open Meal Plan</button>
-      </div>
     </div>
     <div class="settings-card">
       <h3>Not sure what to cook?</h3>
@@ -1099,16 +1121,9 @@ async function renderHome() {
         ${catalog.map(e => `<option value="${escapeAttr(e.name)}">`).join("")}
       </datalist>
     </div>
-    <div class="btn-row">
-      <button class="secondary-btn" id="homeGoShopBtn">Go to Shopping List</button>
-      <button class="secondary-btn" id="homeGoRecipesBtn">Browse Recipes</button>
-    </div>
   `;
 
-  document.getElementById("homeSeePlanBtn").addEventListener("click", () => goToTab("mealplan"));
   document.getElementById("homeRustleUpBtn").addEventListener("click", () => renderRustleUp());
-  document.getElementById("homeGoShopBtn").addEventListener("click", () => goToTab("shop"));
-  document.getElementById("homeGoRecipesBtn").addEventListener("click", () => goToTab("recipes"));
   main.querySelectorAll(".home-plan-row[data-recipe-id]").forEach(row => {
     row.addEventListener("click", () => renderDetail(row.dataset.recipeId));
   });
@@ -1418,7 +1433,7 @@ function renderRecipeList(recipes, planIds) {
           <div class="tag-row">${(r.tags || []).map(t => `<span class="tag">${escapeHtml(t)}</span>`).join("")}</div>
           <div class="card-actions">
             <button class="mini-btn ${inPlan ? "selected" : ""}" data-action="plan-toggle" data-id="${escapeAttr(r.id)}">${inPlan ? "✓ In meal plan" : "+ Add to meal plan"}</button>
-            <button class="mini-btn danger" data-action="delete" data-id="${escapeAttr(r.id)}">Delete</button>
+            <button class="icon-btn danger" data-action="delete" data-id="${escapeAttr(r.id)}" title="Delete recipe">${ICON_TRASH}</button>
           </div>
         </div>
       </div>`;
@@ -1602,9 +1617,9 @@ async function renderDetail(id, opts) {
 
       <div class="card-actions">
         <button class="mini-btn ${inPlan ? "selected" : ""}" id="planToggleBtn">${inPlan ? "✓ In meal plan" : "+ Add to meal plan"}</button>
-        <button class="mini-btn" id="markCookedBtn">Mark as cooked</button>
-        <button class="mini-btn" id="printBtn">Print</button>
-        <button class="mini-btn" id="editBtn">Edit recipe</button>
+        <button class="mini-btn icon-label-btn" id="markCookedBtn">${ICON_FLAME} Mark as cooked</button>
+        <button class="icon-btn" id="printBtn" title="Print">${ICON_PRINT}</button>
+        <button class="icon-btn" id="editBtn" title="Edit recipe">${ICON_EDIT}</button>
       </div>
     </div>
   `;
@@ -1860,7 +1875,7 @@ async function renderMealPlan() {
           </div>` : ""}
           <div class="card-actions">
             ${en.recipeId ? `<button class="mini-btn icon-label-btn" data-action="mark-cooked" data-id="${escapeAttr(en.id)}">${ICON_FLAME} Mark as cooked</button>` : ""}
-            <button class="mini-btn danger" data-action="remove-entry" data-id="${escapeAttr(en.id)}">Remove from plan</button>
+            <button class="icon-btn danger" data-action="remove-entry" data-id="${escapeAttr(en.id)}" title="Remove from plan">${ICON_TRASH}</button>
           </div>
         </div>
       </div>`;
@@ -2164,11 +2179,11 @@ async function renderShoppingList() {
       ${searchBoxHtml("shopSearchInput", "Search your list...", currentShopSearch)}
     </div>
     <div class="btn-row" style="margin-bottom:14px;">
-      <button class="secondary-btn" id="pasteListBtn">Paste a list</button>
+      <button class="secondary-btn icon-label-btn" id="pasteListBtn">${ICON_CLIPBOARD} Paste a list</button>
       <button class="secondary-btn" id="newListBtn">New list</button>
-      <button class="secondary-btn" id="manageIngredientsBtn">Manage items</button>
-      <button class="secondary-btn" id="exportShopBtn">Export list</button>
-      <button class="secondary-btn" id="importShopBtn">Import list</button>
+      <button class="secondary-btn icon-label-btn" id="manageIngredientsBtn">${ICON_LIST} Items</button>
+      <button class="icon-btn" id="exportShopBtn" title="Export list as JSON">${ICON_DOWNLOAD}</button>
+      <button class="icon-btn" id="importShopBtn" title="Import list from JSON">${ICON_UPLOAD}</button>
       <input type="file" id="shopFileInput" accept="application/json">
     </div>
     <div id="shopListArea"></div>
@@ -3600,6 +3615,11 @@ async function renderStackTop() {
   const top = navStack[navStack.length - 1];
   currentTab = top.tab || null;
   setActiveTabButtons(currentTab);
+  // Home is the one screen that shouldn't scroll as a whole page -- it
+  // should always fit the viewport, with only its own meal-plan list
+  // scrolling internally if it's long. Every other screen keeps normal
+  // page scrolling.
+  document.getElementById("main").classList.toggle("home-screen", top.screen === "home");
   const opts = { skipHistory: true };
   if (top.screen === "home") renderHome();
   else if (top.screen === "tab") renderTabHome(top.tab);

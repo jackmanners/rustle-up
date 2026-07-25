@@ -47,8 +47,12 @@
   }
 }
 * { box-sizing: border-box; }
+html, body { height: 100%; }
 body {
   margin: 0;
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
   background-color: var(--cream);
   /* A barely-there grain so flat surfaces don't feel like a bare
      component-library background -- pure CSS/SVG, no network request,
@@ -60,7 +64,7 @@ body {
   transition: background-color 0.2s ease, color 0.2s ease;
 }
 header {
-  position: sticky; top: 0; z-index: 10;
+  flex-shrink: 0;
   background: var(--cream);
   padding: 16px 18px 10px;
   border-bottom: 1px solid var(--line);
@@ -94,7 +98,34 @@ h1 svg { flex-shrink: 0; }
   transition: background 0.15s ease, color 0.15s ease;
 }
 .tab-btn.active { background: var(--cream); color: var(--ink); }
-main { padding: 14px 18px 70px; max-width: 720px; margin: 0 auto; }
+main {
+  padding: 14px 18px 70px; max-width: 720px; margin: 0 auto; width: 100%;
+  flex: 1; min-height: 0; overflow-y: auto;
+}
+/* Home is the one screen meant to be taken in at a glance -- it shouldn't
+   scroll as a whole page. Its own meal-plan list scrolls internally
+   (already capped with its own max-height) while the rest of the
+   dashboard stays put, so everything important fits in view. */
+main.home-screen {
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  padding-bottom: 14px;
+}
+main.home-screen .settings-card:first-child {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+main.home-screen .settings-card:first-child .home-plan-list {
+  flex: 1;
+  min-height: 40px;
+}
+main.home-screen .settings-card:not(:first-child),
+main.home-screen > .btn-row {
+  flex-shrink: 0;
+}
 
 /* Motion -- a few deliberately small touches: cards ease in on render
    instead of popping in instantly, and interactive elements give a
@@ -184,13 +215,13 @@ main { padding: 14px 18px 70px; max-width: 720px; margin: 0 auto; }
 .rustle-tag-chip:active, .rustle-ing-chip:active { transform: scale(0.96); }
 .rustle-tag-chip.selected { background: var(--leaf); color: #fff; border-color: var(--leaf); }
 .rustle-ing-chip { background: var(--staple-bg); color: var(--staple); border-color: var(--staple-line); }
-.card-actions { display:flex; gap:8px; margin-top:10px; flex-wrap: wrap; }
+.card-actions { display:flex; gap:8px; margin-top:10px; flex-wrap: wrap; align-items: center; }
 .mini-btn {
   font-size: 0.72rem; border: 1px solid var(--line); background: var(--cream);
   color: var(--muted); padding: 5px 10px; border-radius: 99px;
 }
 .mini-btn.selected { background: var(--leaf); color: #fff; border-color: var(--leaf); }
-.mini-btn.danger { color: var(--danger); border-color: var(--danger); }
+.mini-btn.danger, .icon-btn.danger { color: var(--danger); border-color: var(--danger); }
 .icon-label-btn { display: inline-flex; align-items: center; gap: 6px; }
 .icon-label-btn svg { flex-shrink: 0; }
 .icon-label-heading { display: flex; align-items: center; gap: 8px; }
@@ -291,7 +322,9 @@ textarea {
 .icon-btn {
   border: 1px solid var(--line); background: var(--cream); color: var(--muted);
   font-size: 0.68rem; font-weight: 600; padding: 4px 7px; border-radius: 7px; white-space: nowrap;
+  display: inline-flex; align-items: center; justify-content: center;
 }
+.icon-btn svg { flex-shrink: 0; }
 .icon-btn.on { background: var(--staple); color: #fff; border-color: var(--staple); }
 .icon-btn:disabled { opacity: 0.3; }
 .drag-handle {
@@ -318,15 +351,19 @@ textarea {
 /* Home dashboard */
 .home-plan-list { max-height: 340px; overflow-y: auto; }
 .home-plan-row {
-  display:flex; align-items:center; gap:10px; padding: 8px 2px; border-bottom: 1px solid var(--line); cursor: pointer;
+  display:flex; align-items:center; gap:8px; padding: 8px 2px; border-bottom: 1px solid var(--line); cursor: pointer;
 }
 .home-plan-row:last-child { border-bottom: none; }
 .home-plan-row:not([data-recipe-id]) { cursor: default; }
 .home-plan-day {
-  flex-shrink:0; width: 34px; font-size: 0.7rem; font-weight: 700; color: var(--leaf-dark);
+  flex-shrink:0; width: 30px; font-size: 0.7rem; font-weight: 700; color: var(--leaf-dark);
   text-transform: uppercase;
 }
-.home-plan-title { font-size: 0.92rem; }
+.home-plan-icon { flex-shrink: 0; display: flex; color: var(--leaf-dark); }
+.home-plan-row-manual .home-plan-icon { color: var(--muted); }
+.home-plan-title { font-size: 0.92rem; flex: 1; min-width: 0; }
+.home-plan-row-manual .home-plan-title { color: var(--muted); font-style: italic; }
+.home-plan-chevron { flex-shrink: 0; color: var(--muted); font-size: 1.1rem; line-height: 1; }
 
 /* Settings / ingredient catalog */
 .settings-card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 16px; margin-bottom: 14px; box-shadow: 0 1px 2px var(--shadow-soft); }
