@@ -23,7 +23,7 @@ const DB_NAME = "recipe-box";
 const DB_VERSION = 1;
 const STORE = "recipes";
 let db;
-let currentTab = "recipes";
+let currentTab = null; // null while on Home; set by renderStackTop() otherwise
 let currentSearch = "";
 let currentTagFilter = "";
 let currentSort = "title"; // title | rating | timesCooked | lastCooked
@@ -988,6 +988,91 @@ async function getMealPlanEntries() {
   }).filter(Boolean);
 }
 
+// The root screen: a condensed look at what's planned (grouped by day once
+// any entry has one, same as the full Meal Plan view) plus a quick-add box
+// straight into the shopping list, for things you think of outside of
+// meal planning that shouldn't require a trip through the Shopping tab.
+async function renderHome() {
+  const main = document.getElementById("main");
+  const entries = await getMealPlanEntries();
+  const anyDayAssigned = entries.some(en => en.day);
+  const sorted = entries.slice().sort((a, b) => {
+    if (anyDayAssigned) {
+      const da = a.day ? MEAL_PLAN_DAYS.indexOf(a.day) : 99;
+      const db = b.day ? MEAL_PLAN_DAYS.indexOf(b.day) : 99;
+      if (da !== db) return da - db;
+    }
+    return a.title.localeCompare(b.title);
+  });
+
+  let planHtml;
+  if (sorted.length === 0) {
+    planHtml = `<div class="empty-msg">Nothing planned yet.</div>`;
+  } else {
+    const shown = sorted.slice(0, 6);
+    planHtml = shown.map(en => `
+      <div class="home-plan-row" ${en.recipeId ? `data-recipe-id="${escapeAttr(en.recipeId)}"` : ""}>
+        <span class="home-plan-day">${en.day ? MEAL_PLAN_DAY_NAMES[en.day].slice(0, 3) : "–"}</span>
+        <span class="home-plan-title">${escapeHtml(en.title)}</span>
+      </div>`).join("");
+    if (sorted.length > shown.length) {
+      planHtml += `<div class="item-src" style="margin-top:6px;">+ ${sorted.length - shown.length} more</div>`;
+    }
+  }
+
+  const catalog = sortCatalogByUsage(await getItemCatalog());
+
+  main.innerHTML = `
+    <div class="settings-card">
+      <h3>Meal Plan at a glance</h3>
+      ${planHtml}
+      <div class="btn-row" style="margin-top:12px;">
+        <button class="secondary-btn" id="homeSeePlanBtn">Open Meal Plan</button>
+      </div>
+    </div>
+    <div class="settings-card">
+      <h3>Quick add to Shopping List</h3>
+      <p>For anything you think of outside of meal planning.</p>
+      <div class="add-item-row">
+        <input type="text" id="homeQuickAddInput" list="itemSuggestions" placeholder="Add an item...">
+        <button class="primary-btn" id="homeQuickAddBtn" style="margin-top:0;">Add</button>
+      </div>
+      <datalist id="itemSuggestions">
+        ${catalog.map(e => `<option value="${escapeAttr(e.name)}">`).join("")}
+      </datalist>
+    </div>
+    <div class="btn-row">
+      <button class="secondary-btn" id="homeGoShopBtn">Go to Shopping List</button>
+      <button class="secondary-btn" id="homeGoRecipesBtn">Browse Recipes</button>
+    </div>
+  `;
+
+  document.getElementById("homeSeePlanBtn").addEventListener("click", () => goToTab("mealplan"));
+  document.getElementById("homeGoShopBtn").addEventListener("click", () => goToTab("shop"));
+  document.getElementById("homeGoRecipesBtn").addEventListener("click", () => goToTab("recipes"));
+  main.querySelectorAll(".home-plan-row[data-recipe-id]").forEach(row => {
+    row.addEventListener("click", () => renderDetail(row.dataset.recipeId));
+  });
+
+  const quickInput = document.getElementById("homeQuickAddInput");
+  const quickAdd = async () => {
+    const raw = quickInput.value.trim();
+    if (!raw) return;
+    const before = await getShopItems();
+    const result = await addTextToShoppingList(raw);
+    quickInput.value = "";
+    quickInput.focus();
+    refreshItemSuggestions();
+    if (result.suggestion) {
+      offerAliasMerge(result.catalogEntry, result.suggestion, null);
+    } else {
+      showToast(`Added "${result.catalogEntry.name}" to your shopping list.`, async () => { await saveShopItems(before); }, null);
+    }
+  };
+  document.getElementById("homeQuickAddBtn").addEventListener("click", quickAdd);
+  quickInput.addEventListener("keydown", (e) => { if (e.key === "Enter") quickAdd(); });
+}
+
 // Renders the toolbar (search/tag/add) once, then delegates the actual
 // list to renderRecipeList(). Typing in the search box only re-renders
 // the list container -- never the toolbar itself -- so the input never
@@ -1182,11 +1267,13 @@ function sourceLineHtml(r) {
   return `<div class="recipe-meta">${escapeHtml(r.source)}</div>`;
 }
 
-async function renderDetail(id) {
+async function renderDetail(id, opts) {
+  opts = opts || {};
   const main = document.getElementById("main");
   const recipes = await getAllRecipes();
   const r = recipes.find(x => x.id === id);
   if (!r) { renderRecipes(); return; }
+  if (!opts.skipHistory) pushNav("detail", "recipes", { id });
   const inPlan = await isRecipeInPlan(r.id);
   const baseServes = r.serves || detectDefaultServes(r);
 
@@ -1223,7 +1310,7 @@ async function renderDetail(id) {
     </div>
   `;
   wireStars(main);
-  document.getElementById("backBtn").addEventListener("click", renderRecipes);
+  document.getElementById("backBtn").addEventListener("click", () => history.back());
   document.getElementById("markCookedBtn").addEventListener("click", async () => {
     const before = { timesCooked: r.timesCooked || 0, lastCooked: r.lastCooked || null };
     const updated = await markRecipeCooked(r.id);
@@ -1232,19 +1319,19 @@ async function renderDetail(id) {
       const recipes = await getAllRecipes();
       const rec = recipes.find(x => x.id === r.id);
       if (rec) { rec.timesCooked = before.timesCooked; rec.lastCooked = before.lastCooked; await putRecipe(rec); }
-    }, () => renderDetail(r.id));
+    }, () => renderDetail(r.id, { skipHistory: true }));
   });
   document.getElementById("printBtn").addEventListener("click", () => window.print());
   document.getElementById("planToggleBtn").addEventListener("click", async () => {
     if (inPlan) {
       const planBefore = await getMealPlan();
       await removeRecipeFromPlanByRecipeId(r.id);
-      showToast("Removed from meal plan.", async () => { await saveMealPlan(planBefore); }, () => renderDetail(r.id));
+      showToast("Removed from meal plan.", async () => { await saveMealPlan(planBefore); }, () => renderDetail(r.id, { skipHistory: true }));
     } else {
       await addRecipeToPlan(r.id);
-      showToast("Added to meal plan.", async () => { await removeRecipeFromPlanByRecipeId(r.id); }, () => renderDetail(r.id));
+      showToast("Added to meal plan.", async () => { await removeRecipeFromPlanByRecipeId(r.id); }, () => renderDetail(r.id, { skipHistory: true }));
     }
-    renderDetail(r.id);
+    renderDetail(r.id, { skipHistory: true });
   });
   document.getElementById("editBtn").addEventListener("click", () => renderRecipeForm(r));
 
@@ -1274,7 +1361,9 @@ async function renderMealPlanNotesCard() {
   if (textarea) textarea.addEventListener("blur", async () => { await saveMealPlanNotesText(textarea.value); });
 }
 
-function renderManualMealForm() {
+function renderManualMealForm(opts) {
+  opts = opts || {};
+  if (!opts.skipHistory) pushNav("manualMeal", "mealplan");
   const main = document.getElementById("main");
   main.innerHTML = `
     <button class="back-btn" id="mealFormBackBtn">&larr; Back to meal plan</button>
@@ -1286,7 +1375,7 @@ function renderManualMealForm() {
       <div id="mfStatus"></div>
     </div>
   `;
-  document.getElementById("mealFormBackBtn").addEventListener("click", renderMealPlan);
+  document.getElementById("mealFormBackBtn").addEventListener("click", () => history.back());
   document.getElementById("mfSaveBtn").addEventListener("click", async () => {
     const title = document.getElementById("mfTitle").value.trim();
     if (!title) {
@@ -1302,7 +1391,7 @@ function renderManualMealForm() {
       const cur = await getMealPlan();
       await saveMealPlan(cur.filter(e => (typeof e === "string" ? true : e.id !== newEntry.id)));
     }, renderMealPlan);
-    renderMealPlan();
+    history.back();
   });
 }
 
@@ -1517,9 +1606,9 @@ async function renderMealPlan() {
       renderMealPlan();
     });
   });
-  document.getElementById("addManualMealBtn").addEventListener("click", renderManualMealForm);
+  document.getElementById("addManualMealBtn").addEventListener("click", () => renderManualMealForm());
   const goShopBtn = document.getElementById("goShopBtn");
-  if (goShopBtn) goShopBtn.addEventListener("click", () => setTab("shop"));
+  if (goShopBtn) goShopBtn.addEventListener("click", () => goToTab("shop"));
 }
 
 /* ---------- Shopping list ---------- */
@@ -1604,7 +1693,9 @@ function stripListMarker(line) {
   return line.replace(/^\s*(?:[-*•‣▪◦○●·]|\[\s?[xX]?\s?\]|\d+[.)]|☐|☑|✓|✔)+\s*/, "").trim();
 }
 
-function renderPasteList() {
+function renderPasteList(opts) {
+  opts = opts || {};
+  if (!opts.skipHistory) pushNav("pasteList", "shop");
   const main = document.getElementById("main");
   main.innerHTML = `
     <button class="back-btn" id="pasteBackBtn">&larr; Back to shopping list</button>
@@ -1615,7 +1706,7 @@ function renderPasteList() {
       <button class="primary-btn" id="pasteListAddBtn">Add to shopping list</button>
     </div>
   `;
-  document.getElementById("pasteBackBtn").addEventListener("click", () => setTab("shop"));
+  document.getElementById("pasteBackBtn").addEventListener("click", () => history.back());
   document.getElementById("pasteListAddBtn").addEventListener("click", async () => {
     const raw = document.getElementById("pasteListInput").value;
     const lines = raw.split("\n").map(stripListMarker).filter(Boolean);
@@ -1626,7 +1717,7 @@ function renderPasteList() {
       const result = await addTextToShoppingList(line);
       if (result.suggestion) lastSuggestion = result;
     }
-    setTab("shop");
+    history.back();
     if (lastSuggestion) {
       offerAliasMerge(lastSuggestion.catalogEntry, lastSuggestion.suggestion, renderShopListArea);
     } else {
@@ -1769,9 +1860,9 @@ async function renderShoppingList() {
   document.getElementById("newItemInput").addEventListener("keydown", (e) => {
     if (e.key === "Enter") addManualItem();
   });
-  document.getElementById("pasteListBtn").addEventListener("click", renderPasteList);
+  document.getElementById("pasteListBtn").addEventListener("click", () => renderPasteList());
   document.getElementById("newListBtn").addEventListener("click", startNewShoppingList);
-  document.getElementById("manageIngredientsBtn").addEventListener("click", renderItemCatalog);
+  document.getElementById("manageIngredientsBtn").addEventListener("click", () => renderItemCatalog());
   document.getElementById("exportShopBtn").addEventListener("click", exportShopList);
   document.getElementById("importShopBtn").addEventListener("click", () => document.getElementById("shopFileInput").click());
   document.getElementById("shopFileInput").addEventListener("change", handleShopListFileImport);
@@ -2321,7 +2412,9 @@ async function renderDuplicateScan() {
   });
 }
 
-async function renderItemCatalog() {
+async function renderItemCatalog(opts) {
+  opts = opts || {};
+  if (!opts.skipHistory) pushNav("itemCatalog", "shop");
   const main = document.getElementById("main");
   const catalog = await getItemCatalog();
   const tags = allItemTags(catalog);
@@ -2345,7 +2438,7 @@ async function renderItemCatalog() {
       </datalist>
     </div>
   `;
-  document.getElementById("ingBackBtn").addEventListener("click", () => setTab("shop"));
+  document.getElementById("ingBackBtn").addEventListener("click", () => history.back());
   document.getElementById("itemCatalogSearch").addEventListener("input", (e) => {
     currentItemSearch = e.target.value;
     renderItemCatalogRows();
@@ -2404,7 +2497,9 @@ async function copyClaudePrompt() {
   }
 }
 
-function renderAdd(statusMsg) {
+function renderAdd(statusMsg, opts) {
+  opts = opts || {};
+  if (!opts.skipHistory) pushNav("add", "recipes");
   const main = document.getElementById("main");
   main.innerHTML = `
     <button class="back-btn" id="addBackBtn">&larr; Back to recipes</button>
@@ -2424,7 +2519,7 @@ function renderAdd(statusMsg) {
       <div>Only <code>title</code> and <code>ingredients</code> are required.</div>
     </div>
   `;
-  document.getElementById("addBackBtn").addEventListener("click", renderRecipes);
+  document.getElementById("addBackBtn").addEventListener("click", () => history.back());
   document.getElementById("manualAddBtn").addEventListener("click", () => renderRecipeForm(null));
   document.getElementById("copyPromptBtn").addEventListener("click", copyClaudePrompt);
   document.getElementById("reviewJsonBtn").addEventListener("click", handleJsonReview);
@@ -2467,9 +2562,11 @@ async function renderUnmatchedHint() {
   });
 }
 
-function renderRecipeForm(recipe) {
+function renderRecipeForm(recipe, opts) {
+  opts = opts || {};
   const main = document.getElementById("main");
   const isEdit = !!recipe;
+  if (!opts.skipHistory) pushNav("form", "recipes", { id: isEdit ? recipe.id : null });
   const r = recipe || { title: "", source: "", sourceUrl: "", tags: [], serves: null, servesLabel: "", time: "", ingredients: [], method: [], notes: "" };
   const defaultServes = r.serves || detectDefaultServes(r) || 4;
 
@@ -2496,9 +2593,7 @@ function renderRecipeForm(recipe) {
       <div id="formStatus"></div>
     </div>
   `;
-  document.getElementById("formBackBtn").addEventListener("click", () => {
-    if (isEdit) renderDetail(r.id); else renderAdd();
-  });
+  document.getElementById("formBackBtn").addEventListener("click", () => history.back());
   let formRating = r.rating || 0;
   function wireFormStars() {
     document.querySelectorAll("#fRatingStars .star").forEach(el => {
@@ -2544,11 +2639,13 @@ function renderRecipeForm(recipe) {
     };
     await putRecipe(savedRecipe);
     if (isEdit) {
-      showToast("Recipe updated.", async () => { await putRecipe(previous); }, () => renderDetail(previous.id));
+      showToast("Recipe updated.", async () => { await putRecipe(previous); }, () => renderDetail(previous.id, { skipHistory: true }));
+      collapseTo(1, "detail", "recipes", { id: savedRecipe.id }); // Form -> Detail
     } else {
       showToast("Recipe added.", async () => { await deleteRecipe(savedRecipe.id); }, renderRecipes);
+      collapseTo(2, "detail", "recipes", { id: savedRecipe.id }); // Form+Add -> Detail
     }
-    renderDetail(savedRecipe.id);
+    renderDetail(savedRecipe.id, { skipHistory: true });
   });
 }
 
@@ -2559,21 +2656,23 @@ function handleJsonReview() {
   try {
     parsed = JSON.parse(raw);
   } catch (e) {
-    renderAdd(`<div class="status-msg status-err">Couldn't parse that as JSON: ${escapeHtml(e.message)}</div>`);
+    renderAdd(`<div class="status-msg status-err">Couldn't parse that as JSON: ${escapeHtml(e.message)}</div>`, { skipHistory: true });
     return;
   }
   const items = Array.isArray(parsed) ? parsed : [parsed];
   const valid = items.filter(item => item.title && item.ingredients);
   const skipped = items.length - valid.length;
   if (valid.length === 0) {
-    renderAdd(`<div class="status-msg status-err">Nothing to add — every item needs at least a title and ingredients.</div>`);
+    renderAdd(`<div class="status-msg status-err">Nothing to add — every item needs at least a title and ingredients.</div>`, { skipHistory: true });
     return;
   }
   pendingImport = valid.map(item => ({ item, serves: detectDefaultServes(item) }));
   renderReview(skipped);
 }
 
-function renderReview(skippedCount) {
+function renderReview(skippedCount, opts) {
+  opts = opts || {};
+  if (!opts.skipHistory) pushNav("review", "recipes", { skippedCount });
   const main = document.getElementById("main");
   let html = `<div class="settings-card">
     <h3>Confirm servings</h3>`;
@@ -2597,7 +2696,7 @@ function renderReview(skippedCount) {
   document.getElementById("confirmImportBtn").addEventListener("click", handleConfirmImport);
   document.getElementById("cancelImportBtn").addEventListener("click", () => {
     pendingImport = null;
-    renderAdd();
+    history.back();
   });
 }
 
@@ -2629,7 +2728,8 @@ async function handleConfirmImport() {
     added++;
   }
   pendingImport = null;
-  renderAdd(`<div class="status-msg status-ok">Added ${added} recipe(s).</div>`);
+  collapseTo(1, "add", "recipes"); // Review -> Add
+  renderAdd(`<div class="status-msg status-ok">Added ${added} recipe(s).</div>`, { skipHistory: true });
 }
 
 /* ---------- Settings: export / import ---------- */
@@ -2805,37 +2905,128 @@ function escapeHtml(str) {
 }
 function escapeAttr(str) { return escapeHtml(str); }
 
-/* ---------- Tabs ---------- */
+/* ---------- Navigation: a hierarchy, not a browsing history ----------
+   navStack is our own in-memory stack of {screen, tab, params}, root-first:
+   navStack[0] is always Home. Every screen has exactly one parent (its
+   tab's home, or Home itself), so "back" always means "pop one level,"
+   never "whatever I happened to visit before" -- no zig-zagging between
+   tabs based on click order.
 
-// Tab switches push a history entry (skipped when we're the one responding
-// to a popstate) so the browser/PWA back button steps back through
-// recently visited tabs instead of immediately closing the app. The last
-// tab is also remembered in localStorage so a refresh reopens where you
-// left off instead of always landing on Recipes.
-function setTab(tab, opts) {
-  opts = opts || {};
+   The browser/hardware back button is *trapped*: on load, and after every
+   forward navigation, we push one throwaway history entry ("the trap").
+   A back press consumes one trap and fires `popstate`; our handler pops
+   navStack by one level and re-renders, or -- if we're already at Home
+   (navStack.length === 1) -- immediately pushes a fresh trap to swallow
+   the press instead of letting the browser/PWA close. In-app "<- Back"
+   buttons call `history.back()` too, so there is exactly one code path
+   for every kind of "back."
+
+   Internal collapses (e.g. saving a recipe folds the Form screen back
+   into Detail) just edit navStack directly and re-render -- no trap
+   needed, since a net *decrease* in stack depth can never leave us short
+   of traps for future legitimate back-presses. */
+
+let navStack = [{ screen: "home" }];
+
+function pushTrap() {
+  history.pushState({ trap: true }, "", "#" + navStack[navStack.length - 1].screen);
+}
+
+// Forward navigation: descend one level from wherever we are.
+function pushNav(screen, tab, params) {
+  navStack.push({ screen, tab: tab || currentTab, params: params || null });
+  currentTab = tab || currentTab;
+  persistNavStack();
+  pushTrap();
+}
+
+// Lateral jump from the tab bar: reset to Home > that tab, discarding
+// whatever nested screen we were on -- an explicit "take me to this
+// section" action, not a hierarchical descent.
+function goToTab(tab) {
   currentTab = tab;
-  try { localStorage.setItem("lastTab", tab); } catch (err) { /* private-mode storage limits -- non-fatal */ }
-  if (!opts.skipHistory && (!history.state || history.state.tab !== tab)) {
-    history.pushState({ tab }, "", "#" + tab);
-  }
+  navStack = [{ screen: "home" }, { screen: "tab", tab }];
+  persistNavStack();
+  pushTrap();
+  renderStackTop();
+}
+function goHome() {
+  currentTab = null;
+  navStack = [{ screen: "home" }];
+  persistNavStack();
+  pushTrap();
+  renderStackTop();
+}
+
+// Replaces the top `levels` stack entries with a single new one (used when
+// finishing a multi-step flow, e.g. Form -> Detail on save, or
+// Review+Add -> Detail on creating a new recipe). Net depth change is
+// always <= 0, so this never needs a new trap.
+function collapseTo(levels, screen, tab, params) {
+  navStack.splice(navStack.length - levels, levels, { screen, tab: tab || currentTab, params: params || null });
+  currentTab = tab || currentTab;
+  persistNavStack();
+}
+
+function persistNavStack() {
+  try {
+    // The Review screen depends on in-memory `pendingImport`, which never
+    // survives a reload -- never persist landing there.
+    const safe = navStack[navStack.length - 1].screen === "review" ? navStack.slice(0, -1) : navStack;
+    localStorage.setItem("navStack", JSON.stringify(safe));
+  } catch (err) { /* private-mode storage limits -- non-fatal */ }
+}
+
+function setActiveTabButtons(tab) {
+  document.getElementById("tabHomeBtn").classList.toggle("active", !tab);
   document.getElementById("tabRecipesBtn").classList.toggle("active", tab === "recipes");
   document.getElementById("tabPlanBtn").classList.toggle("active", tab === "mealplan");
   document.getElementById("tabShopBtn").classList.toggle("active", tab === "shop");
   document.getElementById("tabSettingsBtn").classList.toggle("active", tab === "settings");
+}
+function renderTabHome(tab) {
   if (tab === "recipes") renderRecipes();
   else if (tab === "mealplan") renderMealPlan();
   else if (tab === "shop") { showCheckedItems = false; renderShoppingList(); }
   else if (tab === "settings") renderSettings();
 }
 
-document.getElementById("tabRecipesBtn").addEventListener("click", () => setTab("recipes"));
-document.getElementById("tabPlanBtn").addEventListener("click", () => setTab("mealplan"));
-document.getElementById("tabShopBtn").addEventListener("click", () => setTab("shop"));
-document.getElementById("tabSettingsBtn").addEventListener("click", () => setTab("settings"));
-window.addEventListener("popstate", (e) => {
-  const tab = (e.state && e.state.tab) || "recipes";
-  setTab(tab, { skipHistory: true });
+// Renders whatever's on top of navStack. This is the one place that turns
+// a stack entry into an actual screen -- called after every push, pop,
+// and collapse.
+async function renderStackTop() {
+  const top = navStack[navStack.length - 1];
+  currentTab = top.tab || null;
+  setActiveTabButtons(currentTab);
+  const opts = { skipHistory: true };
+  if (top.screen === "home") renderHome();
+  else if (top.screen === "tab") renderTabHome(top.tab);
+  else if (top.screen === "detail") await renderDetail(top.params.id, opts);
+  else if (top.screen === "add") renderAdd(undefined, opts);
+  else if (top.screen === "form") {
+    const recipe = top.params && top.params.id ? (await getAllRecipes()).find(x => x.id === top.params.id) : null;
+    renderRecipeForm(recipe || null, opts);
+  }
+  else if (top.screen === "review" && pendingImport) renderReview(top.params ? top.params.skippedCount : 0, opts);
+  else if (top.screen === "manualMeal") renderManualMealForm(opts);
+  else if (top.screen === "pasteList") renderPasteList(opts);
+  else if (top.screen === "itemCatalog") await renderItemCatalog(opts);
+  else { navStack = [{ screen: "home" }]; renderHome(); } // fallback, e.g. review with no pendingImport after reload
+}
+
+document.getElementById("tabHomeBtn").addEventListener("click", goHome);
+document.getElementById("tabRecipesBtn").addEventListener("click", () => goToTab("recipes"));
+document.getElementById("tabPlanBtn").addEventListener("click", () => goToTab("mealplan"));
+document.getElementById("tabShopBtn").addEventListener("click", () => goToTab("shop"));
+document.getElementById("tabSettingsBtn").addEventListener("click", () => goToTab("settings"));
+window.addEventListener("popstate", () => {
+  if (navStack.length > 1) {
+    navStack.pop();
+    persistNavStack();
+    renderStackTop();
+  } else {
+    pushTrap(); // already at Home -- swallow the back press instead of exiting
+  }
 });
 document.getElementById("undoToastBtn").addEventListener("click", async () => {
   const undoFn = toastUndoFn;
@@ -2860,10 +3051,21 @@ window.addEventListener("unhandledrejection", (e) => {
     db = await openDB();
     await seedIfEmpty();
     await seedItemCatalogIfEmpty();
-    let initialTab = "recipes";
-    try { initialTab = localStorage.getItem("lastTab") || "recipes"; } catch (err) { /* private-mode storage limits -- non-fatal */ }
-    history.replaceState({ tab: initialTab }, "", "#" + initialTab);
-    setTab(initialTab, { skipHistory: true });
+    try {
+      const saved = JSON.parse(localStorage.getItem("navStack"));
+      if (Array.isArray(saved) && saved.length && saved[0].screen === "home") navStack = saved;
+    } catch (err) { /* corrupt/missing -- fall back to the default [Home] stack */ }
+    currentTab = navStack[navStack.length - 1].tab || null;
+    // pushState (not replaceState): the natural page-load entry must stay
+    // underneath our traps, or an early back-press would fall through to
+    // it and cause a real cross-document navigation (visible as a reload,
+    // or the app exiting) instead of being caught by our popstate handler.
+    // A restored navStack can be several levels deep even though this
+    // fresh document instance hasn't pushed any trap yet, so we seed one
+    // trap per level (not just one) -- otherwise only the *first*
+    // legitimate back-press per session would be safe.
+    for (let i = 0; i < navStack.length; i++) pushTrap();
+    await renderStackTop();
   } catch (err) {
     console.error("Failed to start Rustle Up:", err);
     document.getElementById("main").innerHTML = `
