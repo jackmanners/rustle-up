@@ -4113,13 +4113,25 @@ function persistNavStack() {
   } catch (err) { /* private-mode storage limits -- non-fatal */ }
 }
 
+// Guarded lookup -- a stale service-worker-cached index.html served
+// alongside fresh app.js (a version-skew window during an update) could
+// otherwise throw on a missing element and silently abort all the setup
+// code after it, including the nav wiring further down this file. Missing
+// a highlight/listener on one stale element is a far smaller failure than
+// the whole app going unresponsive.
+function byIdSafe(id) {
+  const el = document.getElementById(id);
+  if (!el) console.warn(`Expected element #${id} not found -- HTML/JS may be out of sync (stale cache?).`);
+  return el;
+}
 function setActiveTabButtons(tab) {
-  document.getElementById("tabHomeBtn").classList.toggle("active", !tab);
-  document.getElementById("tabRecipesBtn").classList.toggle("active", tab === "recipes");
-  document.getElementById("tabPlanBtn").classList.toggle("active", tab === "mealplan");
-  document.getElementById("tabShopBtn").classList.toggle("active", tab === "shop");
-  document.getElementById("tabItemsBtn").classList.toggle("active", tab === "items");
-  document.getElementById("tabSettingsBtn").classList.toggle("active", tab === "settings");
+  const set = (id, on) => { const el = byIdSafe(id); if (el) el.classList.toggle("active", on); };
+  set("tabHomeBtn", !tab);
+  set("tabRecipesBtn", tab === "recipes");
+  set("tabPlanBtn", tab === "mealplan");
+  set("tabShopBtn", tab === "shop");
+  set("tabItemsBtn", tab === "items");
+  set("tabSettingsBtn", tab === "settings");
 }
 function renderTabHome(tab) {
   if (tab === "recipes") renderRecipes();
@@ -4170,12 +4182,23 @@ document.addEventListener("click", (e) => {
   }
 });
 
-document.getElementById("tabHomeBtn").addEventListener("click", goHome);
-document.getElementById("tabRecipesBtn").addEventListener("click", () => goToTab("recipes"));
-document.getElementById("tabPlanBtn").addEventListener("click", () => goToTab("mealplan"));
-document.getElementById("tabShopBtn").addEventListener("click", () => goToTab("shop"));
-document.getElementById("tabItemsBtn").addEventListener("click", () => goToTab("items"));
-document.getElementById("tabSettingsBtn").addEventListener("click", () => {
+// byIdSafe (not plain getElementById) throughout this block -- a stale
+// service-worker-cached index.html served alongside fresh app.js during an
+// update window could otherwise throw on any one missing button and abort
+// every listener still left to attach below it, leaving the whole nav bar
+// unresponsive until a full reinstall. See CACHE_NAME comment in sw.js.
+const tabHomeBtnEl = byIdSafe("tabHomeBtn");
+if (tabHomeBtnEl) tabHomeBtnEl.addEventListener("click", goHome);
+const tabRecipesBtnEl = byIdSafe("tabRecipesBtn");
+if (tabRecipesBtnEl) tabRecipesBtnEl.addEventListener("click", () => goToTab("recipes"));
+const tabPlanBtnEl = byIdSafe("tabPlanBtn");
+if (tabPlanBtnEl) tabPlanBtnEl.addEventListener("click", () => goToTab("mealplan"));
+const tabShopBtnEl = byIdSafe("tabShopBtn");
+if (tabShopBtnEl) tabShopBtnEl.addEventListener("click", () => goToTab("shop"));
+const tabItemsBtnEl = byIdSafe("tabItemsBtn");
+if (tabItemsBtnEl) tabItemsBtnEl.addEventListener("click", () => goToTab("items"));
+const tabSettingsBtnEl = byIdSafe("tabSettingsBtn");
+if (tabSettingsBtnEl) tabSettingsBtnEl.addEventListener("click", () => {
   // A second tap on the cog while already on Settings returns to wherever
   // you were (not just Home) -- goToTab's usual lateral reset would
   // otherwise throw away the nested screen/tab you came from.
@@ -4200,7 +4223,8 @@ window.addEventListener("popstate", () => {
     pushTrap(); // already at Home -- swallow the back press instead of exiting
   }
 });
-document.getElementById("undoToastBtn").addEventListener("click", async () => {
+const undoToastBtnEl = byIdSafe("undoToastBtn");
+if (undoToastBtnEl) undoToastBtnEl.addEventListener("click", async () => {
   const undoFn = toastUndoFn;
   const refreshFn = toastRefreshFn;
   hideToast();
