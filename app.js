@@ -10,13 +10,13 @@
    - meta.shopItems: the shopping list. Independent of the meal
      plan -- nothing here is added automatically. Each item is
      {id, catalogId|null, mergeKey, name, quantity, unit, step,
-      checked, staple, meals}.
+      checked, meals}.
    - meta.itemCatalog: your reusable item list (name, aliases,
-     staple flag, unit/step/default quantity) used for autocomplete
-     and for matching differently-worded ingredients together.
-   - meta.shopOrderMain / meta.shopOrderStaple: the last order you
-     saved with "Update order" -- new items slot in next to their
-     nearest recognized neighbour from that saved order.
+     unit/step/default quantity) used for autocomplete and for
+     matching differently-worded ingredients together.
+   - meta.shopOrderMain: the last order you saved with "Update order"
+     -- new items slot in next to their nearest recognized neighbour
+     from that saved order.
    ============================================================ */
 
 /* ---------- Icons ----------
@@ -70,16 +70,16 @@ let mealPlanNotesOpen = false;
 let shopNotesOpen = false;
 
 const DEFAULT_ITEM_CATALOG = [
-  { id: "salt", name: "Salt", staple: true, tags: ["staple"], aliases: ["salt"], unit: "", step: 1, defaultQty: 1 },
-  { id: "black-pepper", name: "Black pepper", staple: true, tags: ["staple"], aliases: ["black pepper", "pepper"], unit: "", step: 1, defaultQty: 1 },
-  { id: "olive-oil", name: "Olive oil", staple: true, tags: ["staple"], aliases: ["olive oil", "extra virgin olive oil"], unit: "", step: 1, defaultQty: 1 },
-  { id: "cooking-oil", name: "Cooking oil", staple: true, tags: ["staple"], aliases: ["vegetable oil", "sesame oil", "sunflower oil"], unit: "", step: 1, defaultQty: 1 },
-  { id: "sugar", name: "Sugar", staple: true, tags: ["staple"], aliases: ["sugar"], unit: "", step: 1, defaultQty: 1 },
-  { id: "flour", name: "Plain flour", staple: true, tags: ["staple"], aliases: ["plain flour", "flour"], unit: "", step: 1, defaultQty: 1 },
-  { id: "vinegar", name: "Vinegar", staple: true, tags: ["staple"], aliases: ["vinegar"], unit: "", step: 1, defaultQty: 1 },
-  { id: "soy-sauce", name: "Soy sauce", staple: true, tags: ["staple"], aliases: ["soy sauce"], unit: "", step: 1, defaultQty: 1 },
-  { id: "stock-cube", name: "Stock cubes", staple: true, tags: ["staple"], aliases: ["stock cube", "stock cubes"], unit: "", step: 1, defaultQty: 1 },
-  { id: "rice-pouch", name: "Basmati rice (pouch)", staple: false, tags: [],
+  { id: "salt", name: "Salt", tags: [], aliases: ["salt"], unit: "", step: 1, defaultQty: 1 },
+  { id: "black-pepper", name: "Black pepper", tags: [], aliases: ["black pepper", "pepper"], unit: "", step: 1, defaultQty: 1 },
+  { id: "olive-oil", name: "Olive oil", tags: [], aliases: ["olive oil", "extra virgin olive oil"], unit: "", step: 1, defaultQty: 1 },
+  { id: "cooking-oil", name: "Cooking oil", tags: [], aliases: ["vegetable oil", "sesame oil", "sunflower oil"], unit: "", step: 1, defaultQty: 1 },
+  { id: "sugar", name: "Sugar", tags: [], aliases: ["sugar"], unit: "", step: 1, defaultQty: 1 },
+  { id: "flour", name: "Plain flour", tags: [], aliases: ["plain flour", "flour"], unit: "", step: 1, defaultQty: 1 },
+  { id: "vinegar", name: "Vinegar", tags: [], aliases: ["vinegar"], unit: "", step: 1, defaultQty: 1 },
+  { id: "soy-sauce", name: "Soy sauce", tags: [], aliases: ["soy sauce"], unit: "", step: 1, defaultQty: 1 },
+  { id: "stock-cube", name: "Stock cubes", tags: [], aliases: ["stock cube", "stock cubes"], unit: "", step: 1, defaultQty: 1 },
+  { id: "rice-pouch", name: "Basmati rice (pouch)", tags: [],
     aliases: ["rice sachet", "packet of rice", "wholegrain rice", "basmati rice", "wholegrain basmati rice", "cooked rice"], unit: "", step: 1, defaultQty: 1 }
 ];
 
@@ -143,6 +143,14 @@ function getMeta(key) {
 function setMeta(key, value) {
   return new Promise((resolve, reject) => {
     const req = tx("meta", "readwrite").put({ key, value });
+    req.onsuccess = () => resolve();
+    req.onerror = () => reject(req.error);
+  });
+}
+
+function deleteMeta(key) {
+  return new Promise((resolve, reject) => {
+    const req = tx("meta", "readwrite").delete(key);
     req.onsuccess = () => resolve();
     req.onerror = () => reject(req.error);
   });
@@ -226,8 +234,8 @@ async function seedItemCatalogIfEmpty() {
   const legacy = await getMeta("ingredientCatalog");
   if (legacy && legacy.length > 0) {
     await saveItemCatalog(legacy.map(e => ({
-      id: e.id, name: e.name, aliases: e.aliases || [], staple: !!e.staple,
-      tags: e.staple ? ["staple"] : [],
+      id: e.id, name: e.name, aliases: e.aliases || [],
+      tags: (e.tags || []).filter(t => t !== "staple"),
       unit: "", step: 1, defaultQty: 1
     })));
   } else {
@@ -235,18 +243,24 @@ async function seedItemCatalogIfEmpty() {
   }
 }
 
-// One-time reconciliation for catalogs saved before "staple" became a tag
-// (entry.tags including "staple") rather than a lone boolean -- without
-// this, existing staple items would silently show as un-tagged since the
-// UI now reads entry.tags, not entry.staple, to decide what to display.
-async function migrateStapleTags() {
+// One-time cleanup for data saved before "staple" was removed as a concept
+// -- strips the old staple flag/tag from anything already on disk, so it
+// doesn't linger as a stray "staple" tag chip or filter option forever.
+async function removeStapleRemnants() {
   const catalog = await getItemCatalog();
-  let changed = false;
+  let catalogChanged = false;
   catalog.forEach(e => {
-    e.tags = e.tags || [];
-    if (e.staple && !e.tags.includes("staple")) { e.tags.push("staple"); changed = true; }
+    if ("staple" in e) { delete e.staple; catalogChanged = true; }
+    if (e.tags && e.tags.includes("staple")) { e.tags = e.tags.filter(t => t !== "staple"); catalogChanged = true; }
   });
-  if (changed) await saveItemCatalog(catalog);
+  if (catalogChanged) await saveItemCatalog(catalog);
+
+  const items = await getShopItems();
+  let itemsChanged = false;
+  items.forEach(i => { if ("staple" in i) { delete i.staple; itemsChanged = true; } });
+  if (itemsChanged) await saveShopItems(items);
+
+  await deleteMeta("shopOrderStaple");
 }
 
 async function getMealPlanNotes() { return (await getMeta("mealPlanNotes")) || ""; }
@@ -505,7 +519,7 @@ async function ensureCatalogEntryForName(name, unit, defaultQty) {
   const suggestion = findFuzzyCatalogSuggestion(name, catalog);
   const entry = {
     id: slugify(name) + "-" + Date.now().toString(36).slice(-4),
-    name, aliases: [name.toLowerCase()], antiAliases: [], staple: false,
+    name, aliases: [name.toLowerCase()], antiAliases: [],
     unit: unit || "", step: stepForUnit(unit || ""), defaultQty: defaultQty || 1
   };
   catalog.push(entry);
@@ -531,7 +545,6 @@ async function mergeCatalogEntries(fromEntry, targetId) {
     i.catalogId = target.id;
     i.mergeKey = "cat:" + target.id;
     i.name = target.name;
-    i.staple = !!target.staple;
   });
   await saveShopItems(items);
   refreshItemSuggestions();
@@ -564,32 +577,25 @@ function roundQty(n) { return Math.round(n * 1000) / 1000; }
 
 /* ---------- Reference ordering ----------
    No more automatic category sorting. Instead, "Update order" snapshots
-   the current on-screen order (per scope: main / staple) as the reference
-   for where future new items should slot in. Anything not recognized
-   from that saved order just goes to the end. */
+   the current on-screen order as the reference for where future new items
+   should slot in. Anything not recognized from that saved order just goes
+   to the end. */
 
-function shopScopeFilter(scope) {
-  return scope === "staple" ? (i => !i.checked && i.staple) : (i => !i.checked && !i.staple);
-}
-
-function shopOrderMetaKey(scope) { return scope === "staple" ? "shopOrderStaple" : "shopOrderMain"; }
+function isOrderable(i) { return !i.checked; }
 
 async function updateShopOrder() {
   const items = await getShopItems();
-  await setMeta("shopOrderMain", items.filter(shopScopeFilter("main")).map(i => i.catalogId || i.mergeKey));
-  await setMeta("shopOrderStaple", items.filter(shopScopeFilter("staple")).map(i => i.catalogId || i.mergeKey));
+  await setMeta("shopOrderMain", items.filter(isOrderable).map(i => i.catalogId || i.mergeKey));
 }
 
 async function insertItemByReferenceOrder(items, newItem) {
-  const scope = newItem.staple ? "staple" : "main";
-  const refOrder = (await getMeta(shopOrderMetaKey(scope))) || [];
+  const refOrder = (await getMeta("shopOrderMain")) || [];
   const key = newItem.catalogId || newItem.mergeKey;
   const refIdx = refOrder.indexOf(key);
   if (refIdx === -1) { items.push(newItem); return; }
-  const scopeFilter = shopScopeFilter(scope);
   let insertAt = items.length;
   for (let i = 0; i < items.length; i++) {
-    if (!scopeFilter(items[i])) continue;
+    if (!isOrderable(items[i])) continue;
     const k = items[i].catalogId || items[i].mergeKey;
     const idx = refOrder.indexOf(k);
     if (idx !== -1 && idx > refIdx) { insertAt = i; break; }
@@ -597,12 +603,12 @@ async function insertItemByReferenceOrder(items, newItem) {
   items.splice(insertAt, 0, newItem);
 }
 
-// Writes a new id order for one scope (main or staple) back into the full
-// items array, leaving every other item's position untouched.
-async function applyScopeOrder(scope, newOrderIds) {
+// Writes a new id order back into the full items array, leaving every
+// checked item's position untouched.
+async function applyOrder(newOrderIds) {
   const items = await getShopItems();
-  const scopeItems = items.filter(shopScopeFilter(scope));
-  const byId = new Map(scopeItems.map(i => [i.id, i]));
+  const orderableItems = items.filter(isOrderable);
+  const byId = new Map(orderableItems.map(i => [i.id, i]));
   const positions = [];
   items.forEach((it, idx) => { if (byId.has(it.id)) positions.push(idx); });
   newOrderIds.forEach((id, i) => { items[positions[i]] = byId.get(id); });
@@ -643,14 +649,12 @@ function spliceBlock(others, block, beforeCount) {
 }
 
 async function moveSelectedItems(direction) {
-  for (const scope of ["main", "staple"]) {
-    const items = await getShopItems();
-    const scopeIds = items.filter(shopScopeFilter(scope)).map(i => i.id);
-    const selInScope = new Set(scopeIds.filter(id => selectedShopIds.has(id)));
-    if (selInScope.size === 0) continue;
-    const newOrder = moveSelectedBlock(scopeIds, selInScope, direction);
-    await applyScopeOrder(scope, newOrder);
-  }
+  const items = await getShopItems();
+  const ids = items.filter(isOrderable).map(i => i.id);
+  const selected = new Set(ids.filter(id => selectedShopIds.has(id)));
+  if (selected.size === 0) return;
+  const newOrder = moveSelectedBlock(ids, selected, direction);
+  await applyOrder(newOrder);
   renderShopListArea();
 }
 
@@ -713,12 +717,12 @@ function dragAutoScrollTick() {
   requestAnimationFrame(dragAutoScrollTick);
 }
 
-function wireDragHandle(handle, itemEl, scope) {
+function wireDragHandle(handle, itemEl) {
   handle.addEventListener("pointerdown", (e) => {
     e.preventDefault();
     e.stopPropagation();
     try { handle.setPointerCapture(e.pointerId); } catch (err) { /* best-effort */ }
-    const siblingEls = [...itemEl.parentElement.querySelectorAll(`.shop-item[data-scope="${scope}"]`)];
+    const siblingEls = [...itemEl.parentElement.querySelectorAll(".shop-item[data-orderable]")];
     const order = siblingEls.map(el => el.dataset.id);
     const draggedId = itemEl.dataset.id;
     const scrollY = window.scrollY;
@@ -731,7 +735,7 @@ function wireDragHandle(handle, itemEl, scope) {
     const elsById = new Map(siblingEls.map(el => [el.dataset.id, el]));
     const others = order.filter(id => id !== draggedId);
     shopDrag = {
-      draggedId, scope, others, elsById, rects,
+      draggedId, others, elsById, rects,
       originalBoundary: order.indexOf(draggedId),
       draggedHeight: rects.get(draggedId).height,
       startY: e.clientY + scrollY,
@@ -748,13 +752,13 @@ function wireDragHandle(handle, itemEl, scope) {
   });
   const endDrag = async () => {
     if (!shopDrag || shopDrag.draggedId !== itemEl.dataset.id) return;
-    const { scope: dragScope, others, targetOthersIdx, elsById, draggedId } = shopDrag;
+    const { others, targetOthersIdx, elsById, draggedId } = shopDrag;
     const finalOrder = others.slice();
     finalOrder.splice(targetOthersIdx, 0, draggedId);
     elsById.forEach(el => { el.style.transform = ""; });
     itemEl.classList.remove("dragging");
     shopDrag = null;
-    await applyScopeOrder(dragScope, finalOrder);
+    await applyOrder(finalOrder);
     renderShopListArea();
   };
   handle.addEventListener("pointerup", endDrag);
@@ -2002,7 +2006,7 @@ async function addComparisonLineToShoppingList(line) {
     const item = {
       id: genId(), catalogId: catalogEntry.id, mergeKey, name: catalogEntry.name,
       quantity, unit, step: catalogEntry.step || stepForUnit(unit),
-      checked: false, staple: !!catalogEntry.staple, meals: line.meals.slice()
+      checked: false, meals: line.meals.slice()
     };
     await insertItemByReferenceOrder(items, item);
   }
@@ -2183,7 +2187,7 @@ async function addTextToShoppingList(raw) {
     const item = {
       id: genId(), catalogId: catalogEntry.id, mergeKey, name: catalogEntry.name,
       quantity, unit, step: catalogEntry.step || stepForUnit(unit),
-      checked: false, staple: !!catalogEntry.staple, meals: []
+      checked: false, meals: []
     };
     await insertItemByReferenceOrder(items, item);
   }
@@ -2253,7 +2257,7 @@ async function startNewShoppingList() {
     const item = {
       id: genId(), catalogId: entry.id, mergeKey: "cat:" + entry.id, name: entry.name,
       quantity: entry.defaultQty || 1, unit: entry.unit || "", step: entry.step || stepForUnit(entry.unit || ""),
-      checked: false, staple: !!entry.staple, meals: []
+      checked: false, meals: []
     };
     await insertItemByReferenceOrder(items, item);
     await bumpItemUsage(entry.id);
@@ -2265,17 +2269,9 @@ async function startNewShoppingList() {
 
 function buildShoppingListText(items) {
   const unchecked = items.filter(i => !i.checked);
-  const nonStaple = unchecked.filter(i => !i.staple);
-  const staples = unchecked.filter(i => i.staple);
   const lines = ["Shopping List", ""];
   const lineFor = i => `- ${formatQuantity(shopItemQty(i), i.unit)} ${i.name}`.replace(/\s+/g, " ").trim();
-
-  nonStaple.forEach(i => lines.push(lineFor(i)));
-  if (staples.length > 0) {
-    lines.push("", "Staples (probably already have):");
-    staples.forEach(i => lines.push(lineFor(i)));
-  }
-
+  unchecked.forEach(i => lines.push(lineFor(i)));
   return lines.join("\n").trim();
 }
 
@@ -2387,8 +2383,6 @@ async function renderShopListArea() {
 
   const unchecked = items.filter(i => !i.checked && matches(i));
   const checked = items.filter(i => i.checked && matches(i));
-  const nonStaple = unchecked.filter(i => !i.staple);
-  const staples = unchecked.filter(i => i.staple);
 
   // Toolbar sits at the top, above the list, always -- select mode swaps in
   // its own controls; everything used less than "every visit" (paste, new
@@ -2425,20 +2419,13 @@ async function renderShopListArea() {
 
   if (items.length === 0) {
     html += `<div class="empty-msg">Empty. Add items above, or compare against your Meal Plan.</div>`;
-  } else if (term && nonStaple.length === 0 && staples.length === 0 && checked.length === 0) {
+  } else if (term && unchecked.length === 0 && checked.length === 0) {
     html += `<div class="empty-msg">No items match "${escapeHtml(currentShopSearch)}".</div>`;
   } else {
-    if (nonStaple.length === 0 && staples.length === 0) {
+    if (unchecked.length === 0) {
       html += `<div class="empty-msg">Everything's checked off!${checked.length ? " Tap “Show checked” above." : ""}</div>`;
-    }
-    if (nonStaple.length > 0) {
-      html += `<div>${nonStaple.map(item => renderShopItem(item, { scope: "main" })).join("")}</div>`;
-    }
-    if (staples.length > 0) {
-      html += `<div class="staple-section">
-        <div class="section-label">Staples</div>
-        <div>${staples.map(item => renderShopItem(item, { hideBadge: true, scope: "staple" })).join("")}</div>
-      </div>`;
+    } else {
+      html += `<div>${unchecked.map(item => renderShopItem(item, { orderable: true })).join("")}</div>`;
     }
 
     if (!shopSelectMode && showCheckedItems && checked.length > 0) {
@@ -2450,10 +2437,9 @@ async function renderShopListArea() {
 
   listArea.querySelectorAll(".shop-item").forEach(el => {
     const id = el.dataset.id;
-    const scope = el.dataset.scope;
 
     if (shopSelectMode) {
-      if (scope) {
+      if (el.dataset.orderable) {
         el.addEventListener("click", () => {
           if (selectedShopIds.has(id)) selectedShopIds.delete(id); else selectedShopIds.add(id);
           renderShopListArea();
@@ -2487,7 +2473,7 @@ async function renderShopListArea() {
       });
     }
     const handle = el.querySelector('[data-action="drag-handle"]');
-    if (handle) wireDragHandle(handle, el, scope);
+    if (handle) wireDragHandle(handle, el);
 
     const qtyDec = el.querySelector('[data-action="qty-dec"]');
     if (qtyDec) qtyDec.addEventListener("click", async (e) => {
@@ -2619,20 +2605,17 @@ function renderShopItem(item, opts) {
       <span class="qty-unit">${escapeHtml(item.unit || "")}</span>
       <button class="qty-btn" data-action="qty-inc" title="Increase">+</button>
     </span>` : "";
-  return `<div class="shop-item ${item.checked ? "checked" : ""} ${selected ? "selected" : ""}" data-id="${escapeAttr(item.id)}" data-scope="${escapeAttr(opts.scope || "")}" data-catalog-id="${escapeAttr(item.catalogId || "")}">
+  return `<div class="shop-item ${item.checked ? "checked" : ""} ${selected ? "selected" : ""}" data-id="${escapeAttr(item.id)}" ${opts.orderable ? `data-orderable="1"` : ""} data-catalog-id="${escapeAttr(item.catalogId || "")}">
     ${!shopSelectMode ? `<div class="swipe-bg-inner">Delete</div>` : ""}
     <div class="swipe-content">
       ${leadBox}
-      ${opts.scope && !shopSelectMode ? `<div class="drag-handle" data-action="drag-handle" title="Drag to reorder">⠿</div>` : ""}
+      ${opts.orderable && !shopSelectMode ? `<div class="drag-handle" data-action="drag-handle" title="Drag to reorder">⠿</div>` : ""}
       <div class="item-body">
         <div class="item-line">
           <span class="item-text">${escapeHtml(item.name)}</span>
           ${qtyRow}
         </div>
         ${mealsLabel ? `<div class="item-src">${escapeHtml(mealsLabel)}</div>` : ""}
-      </div>
-      <div class="item-controls">
-        ${item.staple && !opts.hideBadge ? `<span class="icon-btn on" style="pointer-events:none;">Staple</span>` : ""}
       </div>
     </div>
   </div>`;
@@ -2783,36 +2766,20 @@ let currentItemTagFilter = "";
 
 // Free-text tags (dairy, frozen, vegan, pantry, gluten-free...) let an item
 // belong to more than one category at once, which a single dropdown
-// category never could. "Staple" stays its own dedicated flag -- it drives
-// the shopping list's separate Staples section and its own saved order --
-// but is folded into this same filter dropdown as a convenience so it
-// reads as one more tag rather than a second, inconsistent system.
+// category never could.
 function allItemTags(catalog) {
   const set = new Set();
-  catalog.forEach(e => (e.tags || []).forEach(t => { if (t !== "staple") set.add(t); }));
+  catalog.forEach(e => (e.tags || []).forEach(t => set.add(t)));
   return [...set].sort();
 }
 function matchesItemTagFilter(entry) {
   if (!currentItemTagFilter) return true;
-  if (currentItemTagFilter === "__staple") return !!entry.staple;
   return (entry.tags || []).includes(currentItemTagFilter);
 }
 
-// "Staple" is a real tag (entry.tags includes "staple"), not a separate
-// checkbox -- entry.staple is kept in sync as a derived boolean purely
-// because the shopping list's Staples section / saved ordering already
-// depend on that field, and it wasn't worth rearchitecting that working,
-// well-tested split just to change how staple-ness is *edited*.
-const STAPLE_TAG = "staple";
-function syncStapleFromTags(entry) {
-  entry.staple = (entry.tags || []).includes(STAPLE_TAG);
-}
-
 function itemTagChipsHtml(entry) {
-  const custom = (entry.tags || []).filter(t => t !== STAPLE_TAG);
-  const isStaple = (entry.tags || []).includes(STAPLE_TAG);
+  const custom = entry.tags || [];
   let html = `<div class="tag-row item-tag-row">`;
-  html += `<span class="tag chip-toggle staple-chip ${isStaple ? "chip-on" : ""}" data-action="toggle-staple" title="Staples get their own section on the shopping list">Staple</span>`;
   html += `<span class="tag chip-toggle default-chip ${entry.defaultItem ? "chip-on" : ""}" data-action="toggle-default" title="Automatically add this to every new shopping list">Auto-add</span>`;
   custom.forEach(t => {
     html += `<span class="tag item-tag-chip" data-tag="${escapeAttr(t)}" title="Tap to remove">${escapeHtml(t)} &times;</span>`;
@@ -2847,9 +2814,8 @@ function itemDetailsFieldsHtml(entry) {
 // instead of editing in place, so drag-to-reorder isn't fighting an
 // always-open text field and the shelf reads at a glance like the list does.
 function renderItemCatalogRow(entry) {
-  const tags = (entry.tags || []).filter(t => t !== STAPLE_TAG);
+  const tags = entry.tags || [];
   const badges = [
-    entry.staple ? `<span class="tag shelf-badge-staple">Staple</span>` : "",
     entry.defaultItem ? `<span class="tag shelf-badge-default">Auto-add</span>` : "",
   ].concat(tags.map(t => `<span class="tag">${escapeHtml(t)}</span>`)).filter(Boolean).join("");
   return `
@@ -2894,7 +2860,6 @@ function startAddItemTag(row, id, onDone) {
       if (entry) {
         entry.tags = entry.tags || [];
         if (!entry.tags.includes(val)) entry.tags.push(val);
-        syncStapleFromTags(entry);
         await saveItemCatalog(catalog);
       }
     }
@@ -2918,9 +2883,9 @@ async function showItemDetailsPopover(catalogId) {
   document.body.appendChild(overlay);
   const close = async () => {
     overlay.remove();
-    // Shopping list rows carry their own name/staple snapshot from when
-    // they were added, so a rename/staple-toggle made here wouldn't
-    // otherwise show up on the list until the item was re-added.
+    // Shopping list rows carry their own name snapshot from when they were
+    // added, so a rename made here wouldn't otherwise show up on the list
+    // until the item was re-added.
     const [items, catalog] = await Promise.all([getShopItems(), getItemCatalog()]);
     const entry = catalog.find(e => e.id === catalogId);
     if (entry) {
@@ -2928,7 +2893,6 @@ async function showItemDetailsPopover(catalogId) {
       items.forEach(i => {
         if (i.catalogId !== catalogId) return;
         if (i.name !== entry.name) { i.name = entry.name; changed = true; }
-        if (i.staple !== !!entry.staple) { i.staple = !!entry.staple; changed = true; }
       });
       if (changed) await saveShopItems(items);
     }
@@ -2956,17 +2920,6 @@ async function showItemDetailsPopover(catalogId) {
     root.querySelectorAll(".ing-name, .ing-unit, .ing-step, .ing-defaultqty, .ing-aliases, .ing-anti-aliases, .ing-notes").forEach(el => {
       el.addEventListener("blur", save);
     });
-    root.querySelector('[data-action="toggle-staple"]').addEventListener("click", async () => {
-      const cat = await getItemCatalog();
-      const e2 = cat.find(x => x.id === catalogId);
-      if (!e2) return;
-      e2.tags = e2.tags || [];
-      if (e2.tags.includes(STAPLE_TAG)) e2.tags = e2.tags.filter(t => t !== STAPLE_TAG);
-      else e2.tags.push(STAPLE_TAG);
-      syncStapleFromTags(e2);
-      await saveItemCatalog(cat);
-      refresh();
-    });
     root.querySelector('[data-action="toggle-default"]').addEventListener("click", async () => {
       const cat = await getItemCatalog();
       const e2 = cat.find(x => x.id === catalogId);
@@ -2981,7 +2934,6 @@ async function showItemDetailsPopover(catalogId) {
         const e2 = cat.find(x => x.id === catalogId);
         if (!e2) return;
         e2.tags = (e2.tags || []).filter(t => t !== chip.dataset.tag);
-        syncStapleFromTags(e2);
         await saveItemCatalog(cat);
         refresh();
       });
@@ -3043,7 +2995,7 @@ function wireItemCatalogEvents() {
     const suggestion = findFuzzyCatalogSuggestion(name, catalog);
     const newEntry = {
       id: slugify(name) + "-" + Date.now().toString(36).slice(-4), name,
-      unit: "", step: 1, defaultQty: 1, staple: false, defaultItem: false,
+      unit: "", step: 1, defaultQty: 1, defaultItem: false,
       aliases: [name.toLowerCase()], antiAliases: [], notes: "", tags: []
     };
     catalog.push(newEntry);
@@ -3132,7 +3084,7 @@ function wireItemDragHandle(handle, itemEl) {
     // finalOrder only covers the currently-visible (search/tag-filtered)
     // rows -- splice those back into their slots within the full catalog,
     // leaving anything filtered out of view untouched (same pattern as
-    // applyScopeOrder for the shopping list's main/staple split).
+    // applyOrder for the shopping list).
     const catalog = await getItemCatalog();
     const byId = new Map(catalog.map(e => [e.id, e]));
     const visibleSet = new Set(finalOrder);
@@ -3264,7 +3216,7 @@ async function renderPopulateFromRecipes() {
     if (matchCatalog(name, cat)) return;
     cat.push({
       id: slugify(name) + "-" + Date.now().toString(36).slice(-4) + "-" + Math.random().toString(36).slice(-3),
-      name, aliases: [name.toLowerCase()], antiAliases: [], staple: false, unit: "", step: stepForUnit(""), defaultQty: 1
+      name, aliases: [name.toLowerCase()], antiAliases: [], unit: "", step: stepForUnit(""), defaultQty: 1
     });
     await saveItemCatalog(cat);
   };
@@ -3297,7 +3249,6 @@ async function renderItemCatalog() {
         ${searchBoxHtml("itemCatalogSearch", "Search your shelf...", currentItemSearch)}
         <select id="itemTagFilter">
           <option value="">All tags</option>
-          <option value="__staple" ${currentItemTagFilter === "__staple" ? "selected" : ""}>Staple</option>
           ${tags.map(t => `<option value="${escapeAttr(t)}" ${t === currentItemTagFilter ? "selected" : ""}>${escapeHtml(t)}</option>`).join("")}
         </select>
         <button class="secondary-btn" id="findDupesBtn">Find duplicates</button>
@@ -3519,7 +3470,7 @@ async function renderUnmatchedHint() {
       if (matchCatalog(name, cat)) return;
       cat.push({
         id: slugify(name) + "-" + Date.now().toString(36).slice(-4) + "-" + Math.random().toString(36).slice(-3),
-        name, aliases: [name.toLowerCase()], antiAliases: [], staple: false, unit: "", step: stepForUnit(""), defaultQty: 1
+        name, aliases: [name.toLowerCase()], antiAliases: [], unit: "", step: stepForUnit(""), defaultQty: 1
       });
     });
     await saveItemCatalog(cat);
@@ -3962,8 +3913,8 @@ function handleFileImport(e) {
         if (parsed.itemCatalog) await saveItemCatalog(parsed.itemCatalog);
         else if (parsed.ingredientCatalog) {
           await saveItemCatalog(parsed.ingredientCatalog.map(e => ({
-            id: e.id, name: e.name, aliases: e.aliases || [], staple: !!e.staple,
-            tags: e.staple ? ["staple"] : [], unit: "", step: 1, defaultQty: 1
+            id: e.id, name: e.name, aliases: e.aliases || [],
+            tags: (e.tags || []).filter(t => t !== "staple"), unit: "", step: 1, defaultQty: 1
           })));
         }
       }
@@ -4247,7 +4198,7 @@ window.addEventListener("unhandledrejection", (e) => {
     db = await openDB();
     await seedIfEmpty();
     await seedItemCatalogIfEmpty();
-    await migrateStapleTags();
+    await removeStapleRemnants();
     try {
       const saved = JSON.parse(localStorage.getItem("navStack"));
       if (Array.isArray(saved) && saved.length && saved[0].screen === "home") navStack = saved;

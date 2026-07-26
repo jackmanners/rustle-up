@@ -448,14 +448,6 @@ textarea {
 .shop-item.selected .swipe-content { background: var(--leaf-bg); border-radius: 8px; }
 .select-box.checked { background: var(--leaf); border-color: var(--leaf); }
 .select-box.checked svg { opacity: 1; }
-.staple-section .section-label {
-  color: var(--staple); border-bottom-color: var(--staple);
-}
-.staple-section .shop-item { border-radius: 8px; margin-bottom: 4px; }
-.staple-section .swipe-content { background: var(--staple-bg); border-bottom: 1px solid var(--staple-line); border-radius: 8px; padding: 10px 10px; }
-.staple-section .box { border-color: var(--staple); }
-.staple-section .shop-item.checked .box { background: var(--staple); border-color: var(--staple); }
-.staple-hint { font-size: 0.76rem; color: var(--muted); margin: 4px 2px 10px; }
 .empty-msg { color: var(--muted); font-size: 0.9rem; text-align: center; padding: 40px 20px; }
 
 /* Shopping list toolbar + overflow menu -- most actions are used rarely
@@ -557,7 +549,6 @@ input[type="file"] { display: none; }
 .shelf-item-row-body { flex: 1; min-width: 0; cursor: pointer; }
 .shelf-item-name { font-family: var(--font-heading); font-size: 0.95rem; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .shelf-item-badges { margin-top: 4px; row-gap: 4px; }
-.tag.shelf-badge-staple { background: var(--staple-bg); color: var(--staple); }
 .tag.shelf-badge-default { background: var(--leaf-bg); color: var(--leaf-dark); }
 .shelf-name-input {
   width: 100%; border: none; border-bottom: 1px solid transparent; background: transparent;
@@ -570,7 +561,6 @@ input[type="file"] { display: none; }
   cursor: pointer; background: var(--cream); color: var(--muted); border: 1px solid var(--line);
   transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
 }
-.chip-toggle.staple-chip.chip-on { background: var(--staple-bg); color: var(--staple); border-color: var(--staple-line); }
 .chip-toggle.default-chip.chip-on { background: var(--leaf-bg); color: var(--leaf-dark); border-color: var(--leaf); }
 .item-tag-chip { cursor: pointer; }
 .item-tag-add, .item-tag-input {
