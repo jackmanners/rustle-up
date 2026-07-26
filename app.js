@@ -1563,7 +1563,6 @@ function renderRecipeList(recipes, planIds) {
           <div class="tag-row">${(r.tags || []).map(t => `<span class="tag">${escapeHtml(t)}</span>`).join("")}</div>
           <div class="card-actions">
             <button class="mini-btn ${inPlan ? "selected" : ""}" data-action="plan-toggle" data-id="${escapeAttr(r.id)}">${inPlan ? "✓ In meal plan" : "+ Add to meal plan"}</button>
-            <button class="icon-btn danger" data-action="delete" data-id="${escapeAttr(r.id)}" title="Delete recipe">${ICON_TRASH}</button>
           </div>
         </div>
       </div>`;
@@ -1592,21 +1591,6 @@ function renderRecipeList(recipes, planIds) {
         await addRecipeToPlan(r.id);
         showToast(`Added "${r.title}" to meal plan.`, async () => { await removeRecipeFromPlanByRecipeId(r.id); }, renderRecipes);
       }
-      renderRecipes();
-    });
-  });
-  listArea.querySelectorAll('[data-action="delete"]').forEach(btn => {
-    btn.addEventListener("click", async (e) => {
-      e.stopPropagation();
-      const r = recipes.find(x => x.id === btn.dataset.id);
-      if (!r) return;
-      const planBefore = await getMealPlan();
-      await deleteRecipe(r.id);
-      await removeRecipeFromPlanByRecipeId(r.id);
-      showToast(`Deleted "${r.title}".`, async () => {
-        await putRecipe(r);
-        await saveMealPlan(planBefore);
-      }, renderRecipes);
       renderRecipes();
     });
   });
@@ -1787,6 +1771,7 @@ async function renderDetail(id, opts) {
         <button class="mini-btn icon-label-btn" id="markCookedBtn">${ICON_FLAME} Mark as cooked</button>
         <button class="icon-btn" id="printBtn" title="Print">${ICON_PRINT}</button>
         <button class="icon-btn" id="editBtn" title="Edit recipe">${ICON_EDIT}</button>
+        <button class="icon-btn danger" id="deleteRecipeBtn" title="Delete recipe">${ICON_TRASH}</button>
       </div>
     </div>
   `;
@@ -1815,6 +1800,16 @@ async function renderDetail(id, opts) {
     renderDetail(r.id, { skipHistory: true });
   });
   document.getElementById("editBtn").addEventListener("click", () => renderRecipeForm(r));
+  document.getElementById("deleteRecipeBtn").addEventListener("click", async () => {
+    const planBefore = await getMealPlan();
+    await deleteRecipe(r.id);
+    await removeRecipeFromPlanByRecipeId(r.id);
+    goToTab("recipes");
+    showToast(`Deleted "${r.title}".`, async () => {
+      await putRecipe(r);
+      await saveMealPlan(planBefore);
+    }, renderRecipes);
+  });
 
   const scaleInput = document.getElementById("scaleServes");
   if (scaleInput) {
