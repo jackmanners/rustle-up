@@ -3803,6 +3803,11 @@ async function renderSettings() {
       </div>
     </div>
     <div class="settings-card">
+      <h3>Add recipes with AI</h3>
+      <p>Copy this prompt into an AI assistant (like Claude) along with a photo or link of a recipe, then paste what it gives you back into Recipes &rarr; + Add recipe &rarr; Import from JSON.</p>
+      <div class="btn-row"><button class="secondary-btn" id="settingsCopyPromptBtn">Copy prompt for AI</button></div>
+    </div>
+    <div class="settings-card">
       <h3>Export library</h3>
       <div class="btn-row"><button class="secondary-btn" id="exportBtn">Export as JSON</button></div>
     </div>
@@ -3837,6 +3842,7 @@ async function renderSettings() {
       renderSettings();
     });
   });
+  document.getElementById("settingsCopyPromptBtn").addEventListener("click", copyClaudePrompt);
   document.getElementById("exportBtn").addEventListener("click", exportLibrary);
   document.getElementById("importBtn").addEventListener("click", () => document.getElementById("fileInput").click());
   document.getElementById("fileInput").addEventListener("change", handleFileImport);

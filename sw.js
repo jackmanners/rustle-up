@@ -1,4 +1,4 @@
-const CACHE_NAME = "rustle-up-v43";
+const CACHE_NAME = "rustle-up-v44";
 // index.html/manifest.json used to be cache-first, which caused a real bug:
 // after an HTML-structure change (e.g. the bottom-nav rework), a browser
 // slow to pick up the new service worker would keep serving the OLD cached
